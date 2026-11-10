@@ -1,0 +1,40 @@
+{
+  "maps": [
+    {
+      "name": "Out",
+      "kind": "array",
+      "key": "u32",
+      "value": "u32",
+      "max_entries": 4
+    },
+    {
+      "name": "RenoOps",
+      "kind": "struct_ops",
+      "key": "u32",
+      "value": "-",
+      "max_entries": 1,
+      "struct_ops": {
+        "type": "tcp_congestion_ops",
+        "name": "rbreno",
+        "ops": [
+          {
+            "member": "init",
+            "program": "reno_init"
+          },
+          {
+            "member": "ssthresh",
+            "program": "reno_ssthresh"
+          },
+          {
+            "member": "cong_avoid",
+            "program": "reno_cong_avoid"
+          },
+          {
+            "member": "undo_cwnd",
+            "program": "reno_undo_cwnd"
+          }
+        ]
+      }
+    }
+  ]
+}

@@ -123,6 +123,9 @@ struct fe_stmt {
 	int buf;
 	fe_expr *buf_len;
 	fe_record_field *count_f;
+	fe_expr **scx_args; /* scx / scxsel: the Integer operands of a sched_ext op (Go: ScxArgs) */
+	size_t n_scx_args;
+	int scx_args_nil;
 };
 
 /* ---- analyze.go Program ---- */
@@ -175,6 +178,12 @@ struct fe_program {
 	fe_ring_decl **rings;
 	size_t n_rings;
 	int rings_nil;
+	sr_str so_type;   /* struct_ops: the kernel type (Go: SOType) */
+	sr_str so_member; /* struct_ops: the member (Go: SOMember) */
+	int64_t *so_args; /* struct_ops: the argument indexes read, ascending and once each (Go: SOArgs; nil when n_so_args 0) */
+	size_t n_so_args;
+	fe_expr *so_val; /* struct_ops: the return value of an integer member (Go: SOVal) */
+	int scx; /* the program calls a sched_ext op (Go: Scx; the module carries ebpf.scx_kfuncs = "insert") */
 };
 
 /* ---- analyze.go Edge and Result ---- */
@@ -204,6 +213,9 @@ typedef struct {
 	fe_program **funcs;
 	size_t n_funcs;
 	int funcs_nil;
+	fe_struct_ops_decl **struct_ops; /* Go: StructOps */
+	size_t n_struct_ops;
+	int struct_ops_nil;
 	fe_name_table membership; /* function -> fe_str_list * (top.h); nil map when membership_nil */
 	int membership_nil;
 	fe_edge *edges;
@@ -223,7 +235,7 @@ typedef struct {
 	fe_ival iv;
 	fe_name_table from; /* immutable: a join makes a new set */
 	int from_nil;
-	int wide, mixed;
+	int wide, mixed, kread; /* kread: a Wide value from ctx.read on every path (its diagnostics keep the ctx.read text) */
 } fe_var_info;
 
 /* ---- loop.go loopFrame and ctxSnapshot ---- */
@@ -335,6 +347,7 @@ typedef struct {
 	fe_name_table ostr_live;
 	fe_name_table kptrs; /* -> fe_kernel_type_decl* */
 	fe_name_table kchecked;
+	fe_name_table so_sock; /* the socket-argument rule: kernel pointer locals that are a struct_ops member's checked socket argument (writable by the socket-write rule) */
 	sr_str *fpath;
 	size_t n_fpath;
 	sr_str ctx_kind;
@@ -443,6 +456,8 @@ fe_expr *fe_global_read(fe_prog_ctx *c, const sr_node *n, fe_global_decl *g, sr_
 int fe_global_add(fe_prog_ctx *c, const sr_node *n, fe_global_decl *g, const sr_node *const *as, size_t n_as,
 		  sr_str ref_var, fe_stmt *out);                                             /* globals.go globalAdd */
 fe_global_decl *fe_counter_read(fe_prog_ctx *c, const sr_node *n);                         /* globals.go counterRead */
+int fe_global_stmt(fe_prog_ctx *c, const sr_node *n, fe_global_decl *g, const sr_node *const *as, size_t n_as, sr_str ref_var, fe_stmt *out,
+		   int *handled); /* globals.go globalStmt */
 void fe_redirect_verdict(fe_prog_ctx *c, const sr_node *n, const sr_node *v);              /* devmap.go redirectVerdict */
 int fe_is_sk_assign(fe_prog_ctx *c, const sr_node *v);                                     /* sklookup.go isSkAssign */
 int fe_sk_assign_stmt(fe_prog_ctx *c, const sr_node *w, fe_stmt *out);                     /* sklookup.go skAssignStmt */
@@ -483,6 +498,21 @@ int fe_is_kptr_read(fe_prog_ctx *c, const sr_node *n);                          
 int fe_top_level(fe_prog_ctx *c, const sr_node *n);                                        /* kernel.go topLevel */
 int fe_kcheck_call(fe_prog_ctx *c, const sr_node *v);                                      /* kernel.go kcheckCall */
 int fe_kcheck_stmt(fe_prog_ctx *c, const sr_node *w, const sr_node *ifn, sr_str ref_var, fe_stmt *out); /* kernel.go kcheckStmt */
+void fe_so_add_index(fe_program *pg, int64_t v); /* structops.go soAddIndex */
+fe_tp_arg *fe_struct_ops_sock(fe_prog_ctx *c, const sr_node *v, const sr_node **as, int64_t i, fe_kernel_type_decl *h); /* structops.go structOpsSock */
+void fe_struct_ops_kptr_refused(fe_prog_ctx *c, const sr_node *n); /* structops.go structOpsKptrRefused */
+int fe_kstore_call(fe_prog_ctx *c, const sr_node *n, fe_stmt *out, int *ok); /* structops.go kstoreCall */
+/* scx.go (body_scx.c) */
+int fe_is_scx_call(fe_prog_ctx *c, const sr_node *n);
+int fe_scx_stmt(fe_prog_ctx *c, const sr_node *n, sr_str ref_var, fe_stmt *out, int *ok);
+fe_expr *fe_scx_expr(fe_prog_ctx *c, const sr_node *n, sr_str ref_var);
+fe_expr *fe_scx_const(fe_prog_ctx *c, const sr_node *n, int *handled);
+int fe_wide_kread(fe_prog_ctx *c, const fe_expr *e); /* program.go wideKread */
+int fe_is_u64_op(sr_str name);                        /* u64ops.go u64Ops */
+int fe_scx_select(fe_prog_ctx *c, const sr_node *n, sr_str ref_var, fe_stmt *out, int *ok);
+void fe_scx_multi_refused(fe_prog_ctx *c, const sr_node *n);
+int fe_scx_status_local(fe_prog_ctx *c, const sr_node *n, const sr_node *v, sr_str ref_var, fe_stmt *out, int *push);
+int fe_scx_op_bits(sr_str op, int i);
 sr_str fe_kchecked_root(fe_prog_ctx *c, const sr_node *n);                                 /* kernel.go kcheckedRoot */
 int fe_kcopy_stmt(fe_prog_ctx *c, const sr_node *n, const sr_node *cp, sr_str ref, fe_map_decl *m, fe_record_field *rf,
 		  fe_stmt *out);                                                             /* kernel.go kcopyStmt (G1) */

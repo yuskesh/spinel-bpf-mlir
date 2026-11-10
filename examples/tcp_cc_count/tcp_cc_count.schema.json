@@ -1,0 +1,262 @@
+{
+  "version": 1,
+  "coverage": {
+    "programs": "complete",
+    "maps": "complete",
+    "records": "complete",
+    "telemetry": "complete"
+  },
+  "core": {
+    "records": [],
+    "maps": [
+      {
+        "symbol": "Out",
+        "kind": "array",
+        "key": {
+          "kind": "int",
+          "bits": 32,
+          "signed": false,
+          "endianness": "little",
+          "alignment": 4
+        },
+        "value": {
+          "kind": "int",
+          "bits": 32,
+          "signed": false,
+          "endianness": "little",
+          "alignment": 4
+        },
+        "max_entries": 32,
+        "flags": 0,
+        "record": "",
+        "note": "Ruby constant Out"
+      },
+      {
+        "symbol": "Tcpca",
+        "kind": "struct_ops",
+        "key": {
+          "kind": "int",
+          "bits": 32,
+          "signed": false,
+          "endianness": "little",
+          "alignment": 4
+        },
+        "max_entries": 1,
+        "flags": 0,
+        "record": "",
+        "struct_ops": {
+          "type": "tcp_congestion_ops",
+          "name": "rbcount",
+          "ops": [
+            {
+              "member": "init",
+              "program": "cc_init"
+            },
+            {
+              "member": "ssthresh",
+              "program": "cc_ssthresh"
+            },
+            {
+              "member": "undo_cwnd",
+              "program": "cc_undo_cwnd"
+            },
+            {
+              "member": "cong_avoid",
+              "program": "cc_cong_avoid"
+            },
+            {
+              "member": "set_state",
+              "program": "cc_set_state"
+            },
+            {
+              "member": "cwnd_event",
+              "program": "cc_cwnd_event"
+            },
+            {
+              "member": "in_ack_event",
+              "program": "cc_in_ack_event"
+            },
+            {
+              "member": "pkts_acked",
+              "program": "cc_pkts_acked"
+            },
+            {
+              "member": "min_tso_segs",
+              "program": "cc_min_tso_segs"
+            },
+            {
+              "member": "sndbuf_expand",
+              "program": "cc_sndbuf_expand"
+            },
+            {
+              "member": "release",
+              "program": "cc_release"
+            }
+          ]
+        },
+        "note": "Ruby BPF.struct_ops :Tcpca"
+      }
+    ],
+    "programs": [
+      {
+        "name": "cc_init",
+        "kind": "struct_ops",
+        "attach_target": "Tcpca",
+        "nargs": 1,
+        "ret": "void",
+        "maps": [
+          "Out"
+        ],
+        "note": "Ruby def cc_init"
+      },
+      {
+        "name": "cc_ssthresh",
+        "kind": "struct_ops",
+        "attach_target": "Tcpca",
+        "nargs": 1,
+        "ret": {
+          "kind": "int",
+          "bits": 32,
+          "signed": false,
+          "endianness": "little",
+          "alignment": 4
+        },
+        "maps": [
+          "Out"
+        ],
+        "note": "Ruby def cc_ssthresh"
+      },
+      {
+        "name": "cc_undo_cwnd",
+        "kind": "struct_ops",
+        "attach_target": "Tcpca",
+        "nargs": 1,
+        "ret": {
+          "kind": "int",
+          "bits": 32,
+          "signed": false,
+          "endianness": "little",
+          "alignment": 4
+        },
+        "maps": [
+          "Out"
+        ],
+        "note": "Ruby def cc_undo_cwnd"
+      },
+      {
+        "name": "cc_cong_avoid",
+        "kind": "struct_ops",
+        "attach_target": "Tcpca",
+        "nargs": 3,
+        "ret": "void",
+        "maps": [
+          "Out"
+        ],
+        "note": "Ruby def cc_cong_avoid"
+      },
+      {
+        "name": "cc_set_state",
+        "kind": "struct_ops",
+        "attach_target": "Tcpca",
+        "nargs": 2,
+        "ret": "void",
+        "maps": [
+          "Out"
+        ],
+        "note": "Ruby def cc_set_state"
+      },
+      {
+        "name": "cc_cwnd_event",
+        "kind": "struct_ops",
+        "attach_target": "Tcpca",
+        "nargs": 2,
+        "ret": "void",
+        "maps": [
+          "Out"
+        ],
+        "args": [
+          null,
+          {
+            "kind": "enum",
+            "bits": 32
+          }
+        ],
+        "note": "Ruby def cc_cwnd_event"
+      },
+      {
+        "name": "cc_in_ack_event",
+        "kind": "struct_ops",
+        "attach_target": "Tcpca",
+        "nargs": 2,
+        "ret": "void",
+        "maps": [
+          "Out"
+        ],
+        "note": "Ruby def cc_in_ack_event"
+      },
+      {
+        "name": "cc_pkts_acked",
+        "kind": "struct_ops",
+        "attach_target": "Tcpca",
+        "nargs": 2,
+        "ret": "void",
+        "maps": [
+          "Out"
+        ],
+        "note": "Ruby def cc_pkts_acked"
+      },
+      {
+        "name": "cc_min_tso_segs",
+        "kind": "struct_ops",
+        "attach_target": "Tcpca",
+        "nargs": 1,
+        "ret": {
+          "kind": "int",
+          "bits": 32,
+          "signed": false,
+          "endianness": "little",
+          "alignment": 4
+        },
+        "maps": [
+          "Out"
+        ],
+        "note": "Ruby def cc_min_tso_segs"
+      },
+      {
+        "name": "cc_sndbuf_expand",
+        "kind": "struct_ops",
+        "attach_target": "Tcpca",
+        "nargs": 1,
+        "ret": {
+          "kind": "int",
+          "bits": 32,
+          "signed": false,
+          "endianness": "little",
+          "alignment": 4
+        },
+        "maps": [
+          "Out"
+        ],
+        "note": "Ruby def cc_sndbuf_expand"
+      },
+      {
+        "name": "cc_release",
+        "kind": "struct_ops",
+        "attach_target": "Tcpca",
+        "nargs": 1,
+        "ret": "void",
+        "maps": [
+          "Out"
+        ],
+        "note": "Ruby def cc_release"
+      }
+    ]
+  },
+  "telemetry": {
+    "clocks": [],
+    "value_maps": [],
+    "bounds_sets": [],
+    "signals": []
+  },
+  "extensions": {}
+}

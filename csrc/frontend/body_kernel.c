@@ -4,6 +4,8 @@
 #include "body_g2.h"
 
 #include <stdint.h>
+#include <stdio.h>
+#include <string.h>
 
 /* KernelTypeDecl.field and Program.tpArg are the core's (body.h contract change 2) */
 #define kt_field fe_kernel_type_decl_field
@@ -255,7 +257,7 @@ int fe_kcheck_call(fe_prog_ctx *c, const sr_node *v)
 {
 	if (!g2_is(v, "CallNode"))
 		return 0;
-	if (sr_eqc(g2_str(v, "name"), "kptr_or_null") && fe_is_var_read(c, recv_of(c, v), c->param) && fe_uses_kernel_types(c->prog))
+	if (sr_eqc(g2_str(v, "name"), "kptr_or_null") && fe_is_var_read(c, recv_of(c, v), c->param) && (fe_uses_kernel_types(c->prog) || sr_eqc(c->prog->kind, "struct_ops")))
 		return 1;
 	return sr_eqc(g2_str(v, "name"), "ptr") && fe_is_kptr_read(c, recv_of(c, v));
 }
@@ -288,12 +290,14 @@ int fe_kcheck_stmt(fe_prog_ctx *c, const sr_node *w, const sr_node *ifn, sr_str 
 	const sr_node **as = fe_args(c->a, v, &n_as);
 	fe_stmt s = fe_stmt_new("kcheck");
 	s.var = name;
+	int so_sock = 0; /* R1: the pointer is the struct_ops member's checked socket argument (the only writable one, R2) */
 	s.pos = g2_pos(c, w);
 	s.if_pos = g2_pos(c, ifn);
 	if (sr_eqc(g2_str(v, "name"), "kptr_or_null")) {
 		const char *want = sr_eqc(c->prog->kind, "tp_btf")   ? "TpBtfCtx#kptr_or_null"
 				   : sr_eqc(c->prog->kind, "fentry") ? "FentryCtx#kptr_or_null"
-								     : "";
+				   : sr_eqc(c->prog->kind, "struct_ops") ? "StructOpsCtx#kptr_or_null"
+									 : "";
 		if (!sr_eqc(callee, want)) {
 			g2_reject(c, FE_SB011, v, "`kptr_or_null` resolves to %s, not BPF::%c", callee, want);
 			return 0;
@@ -313,6 +317,11 @@ int fe_kcheck_stmt(fe_prog_ctx *c, const sr_node *w, const sr_node *ifn, sr_str 
 			return 0;
 		fe_tp_arg *ta = tp_arg(c->prog, i);
 		fe_kernel_type_decl *h = handle(c, g2_str(as[1], "name"));
+		if (sr_eqc(c->prog->kind, "struct_ops")) { /* the socket-argument rule: the member's socket argument, as a tcp_sock */
+			if (!(ta = fe_struct_ops_sock(c, v, as, i, h)))
+				return 0;
+			so_sock = !strcmp(fe_so_member_of(c->prog->so_type, c->prog->so_member)->args[i].kind, "sock"); /* a task is not writable */
+		}
 		if (!ta) {
 			g2_reject(c, FE_SB033, as[0], "argument %d is not declared in `BPF.%s … args:`", i, c->prog->kind);
 			return 0;
@@ -373,8 +382,11 @@ int fe_kcheck_stmt(fe_prog_ctx *c, const sr_node *w, const sr_node *ifn, sr_str 
 	fe_name_table pre = c->env;
 	c->env = fe_copy_env(&pre);
 	fe_name_set(&c->kptrs, name, s.kt);
+	if (so_sock)
+		fe_name_set(&c->so_sock, name, g2_true);
 	s.then = arm(c, ifn, ref_var);
 	fe_name_delete(&c->kptrs, name);
+	fe_name_delete(&c->so_sock, name);
 	fe_name_table then_env = c->env;
 	c->env = fe_copy_env(&pre);
 	const sr_node *sub = fe_ast_ref(c->a, ifn, "subsequent");
@@ -580,4 +592,190 @@ fe_expr *fe_kaddr_read(fe_prog_ctx *c, const sr_node *n, const sr_node *recv, fe
 	e->path = kptr_of(c, t)->name;
 	e->iv = fe_width_range(64, 1);
 	return e;
+}
+
+/* structops.go soAddIndex: add i to the program's struct_ops argument indexes, ascending and once each */
+void fe_so_add_index(fe_program *pg, int64_t v)
+{
+	size_t k = 0;
+	while (k < pg->n_so_args && pg->so_args[k] < v)
+		k++;
+	if (k == pg->n_so_args || pg->so_args[k] != v) {
+		pg->so_args = sr_grow(pg->so_args, pg->n_so_args * sizeof *pg->so_args, (pg->n_so_args + 1) * sizeof *pg->so_args);
+		memmove(pg->so_args + k + 1, pg->so_args + k, (pg->n_so_args - k) * sizeof *pg->so_args);
+		pg->so_args[k] = v;
+		pg->n_so_args++;
+	}
+}
+
+/* structops.go structOpsSock (the socket-argument rule): argument i of the member must be the socket, and T a kernel type named tcp_sock */
+fe_tp_arg *fe_struct_ops_sock(fe_prog_ctx *c, const sr_node *v, const sr_node **as, int64_t i, fe_kernel_type_decl *h)
+{
+	(void)v;
+	const fe_so_member *m = fe_so_member_of(c->prog->so_type, c->prog->so_member);
+	if (!m)
+		return NULL;
+	if (i < 0 || i >= m->nargs) {
+		g2_reject(c, FE_SB033, as[0], "%s.%c has %d arguments — `%s.kptr_or_null(%d, T)` is outside them", c->prog->so_type, m->name,
+			  m->nargs, c->param, i);
+		return NULL;
+	}
+	if (sr_eqc(c->prog->so_type, "sched_ext_ops")) { /* a task argument, read as a task_struct */
+		if (strcmp(m->args[i].kind, "task")) {
+			g2_reject(c, FE_SB033, as[0],
+				  "argument %d of %s.%c is not a task pointer — only a struct task_struct * argument is read with `%s.kptr_or_null(i, T)`",
+				  i, c->prog->so_type, m->name, c->param);
+			return NULL;
+		}
+		if (!h || !sr_eqc(h->name, "task_struct")) {
+			sr_str got = g2_str(as[1], "name");
+			if (h) {
+				sr_buf b = {0};
+				sr_putstr(&b, h->const_name);
+				sr_puts(&b, " (");
+				sr_putstr(&b, h->name);
+				sr_puts(&b, ")");
+				got = sr_bufstr(&b);
+			}
+			g2_reject(c, FE_SB033, as[1],
+				  "argument %d of %s.%c is read as the kernel type task_struct, not %s — declare it with `BPF.kernel_type(S, \"task_struct\", …)`",
+				  i, c->prog->so_type, m->name, got);
+			return NULL;
+		}
+	} else if (strcmp(m->args[i].kind, "sock")) {
+		g2_reject(c, FE_SB033, as[0],
+			  "argument %d of %s.%c is not the socket pointer — only the struct sock * argument is read with `%s.kptr_or_null(i, T)` (as a tcp_sock)",
+			  i, c->prog->so_type, m->name, c->param);
+		return NULL;
+	} else if (!h || !sr_eqc(h->name, "tcp_sock")) {
+		sr_str got = g2_str(as[1], "name");
+		if (h) {
+			sr_buf b = {0};
+			sr_putstr(&b, h->const_name);
+			sr_puts(&b, " (");
+			sr_putstr(&b, h->name);
+			sr_puts(&b, ")");
+			got = sr_bufstr(&b);
+		}
+		g2_reject(c, FE_SB033, as[1],
+			  "argument %d of %s.%c is read as the kernel type tcp_sock (the verifier promotes struct sock * to tcp_sock), not %s — declare it with `BPF.kernel_type(S, \"tcp_sock\", …)`",
+			  i, c->prog->so_type, m->name, got);
+		return NULL;
+	}
+	fe_program *pg = c->prog;
+	fe_tp_arg *ta = tp_arg(pg, i);
+	if (!ta) {
+		pg->t_args = sr_grow(pg->t_args, pg->n_t_args * sizeof *pg->t_args, (pg->n_t_args + 1) * sizeof *pg->t_args);
+		pg->t_args[pg->n_t_args] = (fe_tp_arg){.idx = i, .kt = h, .null = 1};
+		ta = &pg->t_args[pg->n_t_args++];
+		pg->t_args_nil = 0;
+	}
+	fe_so_add_index(pg, i);
+	return ta;
+}
+
+/* structops.go structOpsKptrRefused: `ctx.kptr(i, T)` in a struct_ops program (R1: the socket only through the null check) */
+void fe_struct_ops_kptr_refused(fe_prog_ctx *c, const sr_node *n)
+{
+	g2_reject(c, FE_SB033, n,
+		  "a struct_ops program reads its socket argument only as `tp = %s.kptr_or_null(i, T)` followed by `if tp` — not with `%s.kptr`",
+		  c->param, c->param);
+}
+
+/* structops.go soFieldTypeName */
+static const char *so_field_type_name(const fe_kernel_field *f)
+{
+	static const char *const names[2][4] = {{"u8", "u16", "u32", "u64"}, {"i8", "i16", "i32", "i64"}};
+	int k = f->bits == 8 ? 0 : f->bits == 16 ? 1 : f->bits == 32 ? 2 : 3;
+	return names[f->is_signed ? 1 : 0][k];
+}
+
+/* structops.go kstoreCall (the socket-write rule): the statement `q.set_field(:m, v)` → Stmt "kstore"; the old name `q.store(…)` on a kernel
+ * pointer is a named refusal. Returns 0 when n is neither on a kernel pointer nor on a checked local (not handled), 1 when handled
+ * (*ok says whether *out is a statement). */
+int fe_kstore_call(fe_prog_ctx *c, const sr_node *n, fe_stmt *out, int *ok)
+{
+	*ok = 0;
+	sr_str op = g2_str(n, "name");
+	if (!sr_eqc(op, "set_field") && !sr_eqc(op, "store"))
+		return 0;
+	const sr_node *recv = recv_of(c, n);
+	if (!g2_is(recv, "LocalVariableReadNode"))
+		return 0;
+	sr_str t = g2_str(recv, "name");
+	fe_kernel_type_decl *d = kptr_of(c, t);
+	if (!d) {
+		if (fe_name_get(&c->kchecked, t)) { /* after the `if q` (or in its else): q is not a pointer there */
+			g2_reject(c, FE_SB005, n,
+				  "`%s` (a nullable kernel pointer) may be read only as `if %s` and as `%s.load.m` / `%s.set_field(:m, v)` inside it", t, t,
+				  t, t);
+			return 1;
+		}
+		return 0;
+	}
+	if (sr_eqc(op, "store")) {
+		g2_reject(c, FE_SB033, n,
+			  "`%s.store` is not the kernel field write — write a field with `%s.set_field(:m, v)` (`store` is Hash#store to Spinel)", t, t);
+		return 1;
+	}
+	int cok;
+	sr_str callee = fe_callee(c, n, &cok);
+	if (!cok)
+		return 1;
+	if (!sr_eqc(callee, "KPtr#set_field")) {
+		g2_reject(c, FE_SB011, n, "`set_field` resolves to %s, not BPF::KPtr#set_field", callee);
+		return 1;
+	}
+	if (!sr_eqc(c->prog->kind, "struct_ops")) {
+		g2_reject(c, FE_SB033, n, "a kernel struct field is written only in a struct_ops program (`tp.set_field(:m, v)`) — %s programs read kernel structs only",
+			  c->prog->kind);
+		return 1;
+	}
+	if (!fe_name_get(&c->so_sock, t)) {
+		g2_reject(c, FE_SB033, n,
+			  "`%s` is not the member's checked socket argument — only the tcp_sock bound by `tp = %s.kptr_or_null(i, T)` is written (the kernel writes no other struct)",
+			  t, c->param);
+		return 1;
+	}
+	size_t n_as;
+	const sr_node **as = fe_args(c->a, n, &n_as);
+	if (n_as != 2 || !g2_is(as[0], "SymbolNode")) {
+		g2_reject(c, FE_SB033, n, "`%s.set_field(:m, v)` takes a member Symbol literal and an Integer", t);
+		return 1;
+	}
+	fe_kernel_field *f = kt_field(d, g2_str(as[0], "value"));
+	if (!f || !sr_eqc(f->kind, "int")) {
+		g2_reject(c, FE_SB033, as[0], "%s (%s) %c `%s` to write", d->const_name, d->name, f ? "has no integer member" : "declares no member",
+			  g2_str(as[0], "value"));
+		return 1;
+	}
+	fe_expr *e = fe_ctx_expr(c, as[1], (sr_str){0});
+	if (!e)
+		return 1;
+	fe_ival r = fe_width_range(f->bits, f->is_signed);
+	if (e->bool_ || e->wide) {
+		g2_reject(c, FE_SB014, as[1], "the value is %c — it does not fit %s.%s (%c %I); write an Integer that fits",
+			  e->bool_ ? "a Bool, not an Integer" : "an unnarrowed u64 value", d->name, f->name, so_field_type_name(f), r);
+		return 1;
+	}
+	if (!fe_iv_within(e->iv, r.lo, r.hi)) {
+		uint64_t hi = f->bits >= 64 ? (uint64_t)INT64_MAX : f->is_signed ? ((uint64_t)1 << (f->bits - 1)) - 1 : ((uint64_t)1 << f->bits) - 1;
+		char mask[24];
+		snprintf(mask, sizeof mask, "%llX", (unsigned long long)hi);
+		g2_reject(c, FE_SB014, as[1],
+			  "the value's range %I does not fit %s.%s (%c %I) — the store would truncate silently; narrow it (e.g. `& 0x%c`)", e->iv, d->name,
+			  f->name, so_field_type_name(f), r, mask);
+		return 1;
+	}
+	fe_stmt s = fe_stmt_new("kstore");
+	s.var = t;
+	fe_record_field *rf = sr_alloc(sizeof *rf);
+	*rf = (fe_record_field){.name = f->name, .bits = f->bits, .is_signed = f->is_signed};
+	s.field = rf;
+	s.kt = d;
+	s.val = e;
+	s.pos = g2_pos(c, n);
+	*out = s;
+	*ok = 1;
+	return 1;
 }

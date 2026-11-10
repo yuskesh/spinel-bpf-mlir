@@ -158,7 +158,92 @@ typedef struct {
 	fe_tp_field *tfields; /* Go: TFields */
 	size_t n_tfields;
 	int tfields_nil;
+	sr_str so_type;   /* struct_ops: the kernel type (Go: SOType) */
+	sr_str so_member; /* struct_ops: the member this callback fills (Go: SOMember) */
 } fe_root_decl;
+
+/* ---- structops.go: StructOpsDecl and StructOpsSlot ---- */
+typedef struct {
+	sr_str member;
+	sr_str program;
+} fe_struct_ops_slot;
+
+typedef struct {
+	sr_str const_name; /* Go: Const */
+	sr_str type;
+	sr_str kname;
+	fe_struct_ops_slot *ops;
+	size_t n_ops;
+	int ops_nil;
+	sr_str *data_keys; /* Go: Data (nil when no data member besides name is given; the keys in the order given) */
+	uint64_t *data_vals;
+	size_t n_data;
+	fe_pos pos;
+	int64_t end_line; /* Go: EndLine */
+} fe_struct_ops_decl;
+
+/* structops.go soArg / soMember / soType: the member table of a struct_ops type (structops.c) */
+typedef struct {
+	const char *kind; /* "sock", "task", "exitinfo", "ptr", "bool", "int" or "enum" */
+	const char *type; /* the integer type name for int and enum ("u32"), NULL otherwise */
+	int64_t bits;
+} fe_so_arg;
+
+typedef struct {
+	const char *name;
+	int64_t line;
+	const fe_so_arg *args;
+	int64_t nargs;
+	const char *ret; /* "void" or an integer type name (u32, i32) */
+} fe_so_member;
+
+/* soData, soFlag and an Excluded row */
+typedef struct {
+	const char *name;
+	int64_t line;
+	int64_t bits;
+	uint64_t max;
+	uint64_t clear;
+} fe_so_data;
+
+typedef struct {
+	const char *name;
+	int64_t line;
+	uint64_t value;
+} fe_so_flag;
+
+typedef struct {
+	const char *name;
+	const char *why;
+	int64_t line; /* 0 when the table has no line for it (tcp_congestion_ops' get_info) */
+} fe_so_excluded;
+
+/* soType */
+typedef struct {
+	const char *name;
+	const char *header;
+	int64_t line;
+	const fe_so_member *members;
+	size_t n_members;
+	const char *const *const *required; /* each row NULL-terminated */
+	size_t n_required;
+	int64_t name_max, name_line;
+	const fe_so_excluded *excluded;
+	size_t n_excluded;
+	const fe_so_data *data;
+	size_t n_data;
+	const fe_so_flag *flags;
+	size_t n_flags;
+	const char *const *sleepable; /* NULL-terminated */
+} fe_so_type;
+
+/* structOpsTypes: the type named `name`, or NULL; fe_so_types lists them (the table print of the tests) */
+const fe_so_type *fe_so_type_of(sr_str name);
+extern const fe_so_type *const fe_so_types[];
+int fe_so_sleepable(sr_str type, sr_str member);
+
+/* soMemberOf: the table row of member `member` of struct_ops type `type`, or NULL */
+const fe_so_member *fe_so_member_of(sr_str type, sr_str member);
 
 /* threadRef */
 typedef struct {
@@ -240,6 +325,9 @@ typedef struct {
 	int root_kinds_nil;
 	fe_name_table bad_hash;   /* set */
 	fe_name_table bad_recs;   /* set */
+	fe_struct_ops_decl **struct_ops; /* z.structOps (in declaration order; Go nil when none) */
+	size_t n_struct_ops;
+	int struct_ops_nil;
 
 	/* scanTop's result */
 	fe_root_decl *roots;

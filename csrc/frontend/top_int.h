@@ -117,6 +117,8 @@ int t_struct_args_decl(t_ctx *c, const sr_node *n, t_nodes as, const char *kind,
 int t_tracepoint_decl(t_ctx *c, const sr_node *n, t_nodes as, fe_root_decl *r);
 int t_uprobe_decl(t_ctx *c, const sr_node *n, t_nodes as, fe_root_decl *r);
 int t_fmod_ret_decl(t_ctx *c, const sr_node *n, t_nodes as, fe_root_decl *r);
+/* structops.go structOpsDecl: 1 with the declaration and one root per member (*roots, *n_roots), or 0 after an SB008 */
+int t_struct_ops_decl(t_ctx *c, const sr_node *n, fe_struct_ops_decl **out, fe_root_decl **roots, size_t *n_roots);
 /* analyze.go rootCall, scanTop, scanProgramWide */
 int t_root_call(t_ctx *c, const sr_node *n, fe_root_decl *r);
 void t_scan_top(t_ctx *c, int64_t fid);

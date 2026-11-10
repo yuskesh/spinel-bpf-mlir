@@ -1,0 +1,421 @@
+{
+  "version": 1,
+  "coverage": {
+    "programs": "complete",
+    "maps": "complete",
+    "records": "complete",
+    "telemetry": "complete"
+  },
+  "core": {
+    "kernel_types": [
+      {
+        "name": "sched_ext_entity",
+        "note": "Ruby Struct SchedExtEntity",
+        "fields": [
+          {
+            "name": "dsq_vtime",
+            "type": {
+              "kind": "int",
+              "bits": 64,
+              "signed": false,
+              "endianness": "little",
+              "alignment": 8
+            }
+          },
+          {
+            "name": "slice",
+            "type": {
+              "kind": "int",
+              "bits": 64,
+              "signed": false,
+              "endianness": "little",
+              "alignment": 8
+            }
+          },
+          {
+            "name": "weight",
+            "type": {
+              "kind": "int",
+              "bits": 32,
+              "signed": false,
+              "endianness": "little",
+              "alignment": 4
+            }
+          }
+        ]
+      },
+      {
+        "name": "task_struct",
+        "note": "Ruby Struct Task",
+        "fields": [
+          {
+            "name": "scx",
+            "type": {
+              "kind": "struct",
+              "struct": "sched_ext_entity"
+            }
+          }
+        ]
+      },
+      {
+        "name": "scx_exit_info",
+        "note": "the fields ebpf.scx.exit_info reads (owned by the frontend)",
+        "fields": [
+          {
+            "name": "kind",
+            "type": {
+              "kind": "enum",
+              "bits": 32
+            }
+          },
+          {
+            "name": "exit_code",
+            "type": {
+              "kind": "int",
+              "bits": 64,
+              "signed": true,
+              "endianness": "little",
+              "alignment": 8
+            }
+          },
+          {
+            "name": "reason",
+            "type": {
+              "kind": "strptr"
+            }
+          },
+          {
+            "name": "msg",
+            "type": {
+              "kind": "strptr"
+            }
+          }
+        ]
+      }
+    ],
+    "records": [
+      {
+        "symbol": "user_exit_info",
+        "id": 0,
+        "size": 1168,
+        "min_size": 1168,
+        "alignment": 8,
+        "required_through": "",
+        "note": "the C struct user_exit_info (tools/sched_ext/include/scx/user_exit_info_common.h) without the dump",
+        "fields": [
+          {
+            "name": "kind",
+            "type": {
+              "kind": "int",
+              "bits": 32,
+              "signed": true,
+              "endianness": "little",
+              "alignment": 4
+            },
+            "offset": 0
+          },
+          {
+            "name": "exit_cpu",
+            "type": {
+              "kind": "int",
+              "bits": 32,
+              "signed": true,
+              "endianness": "little",
+              "alignment": 4
+            },
+            "offset": 4
+          },
+          {
+            "name": "exit_code",
+            "type": {
+              "kind": "int",
+              "bits": 64,
+              "signed": true,
+              "endianness": "little",
+              "alignment": 8
+            },
+            "offset": 8
+          },
+          {
+            "name": "reason",
+            "type": {
+              "kind": "array",
+              "count": 128,
+              "element": {
+                "kind": "int",
+                "bits": 8,
+                "signed": true,
+                "endianness": "little",
+                "alignment": 1
+              }
+            },
+            "offset": 16
+          },
+          {
+            "name": "msg",
+            "type": {
+              "kind": "array",
+              "count": 1024,
+              "element": {
+                "kind": "int",
+                "bits": 8,
+                "signed": true,
+                "endianness": "little",
+                "alignment": 1
+              }
+            },
+            "offset": 144
+          }
+        ]
+      }
+    ],
+    "maps": [
+      {
+        "symbol": "Stats",
+        "kind": "percpu_array",
+        "key": {
+          "kind": "int",
+          "bits": 32,
+          "signed": false,
+          "endianness": "little",
+          "alignment": 4
+        },
+        "value": {
+          "kind": "int",
+          "bits": 64,
+          "signed": false,
+          "endianness": "little",
+          "alignment": 8
+        },
+        "max_entries": 2,
+        "flags": 0,
+        "record": "",
+        "note": "Ruby constant Stats"
+      },
+      {
+        "symbol": "SimpleOps",
+        "kind": "struct_ops",
+        "key": {
+          "kind": "int",
+          "bits": 32,
+          "signed": false,
+          "endianness": "little",
+          "alignment": 4
+        },
+        "max_entries": 1,
+        "flags": 0,
+        "record": "",
+        "struct_ops": {
+          "type": "sched_ext_ops",
+          "name": "rbsimple",
+          "timeout_ms": 5000,
+          "flags": 8,
+          "ops": [
+            {
+              "member": "select_cpu",
+              "program": "simple_select_cpu"
+            },
+            {
+              "member": "enqueue",
+              "program": "simple_enqueue"
+            },
+            {
+              "member": "dispatch",
+              "program": "simple_dispatch"
+            },
+            {
+              "member": "running",
+              "program": "simple_running"
+            },
+            {
+              "member": "stopping",
+              "program": "simple_stopping"
+            },
+            {
+              "member": "enable",
+              "program": "simple_enable"
+            },
+            {
+              "member": "init",
+              "program": "simple_init"
+            },
+            {
+              "member": "exit",
+              "program": "simple_exit"
+            }
+          ]
+        },
+        "note": "Ruby BPF.struct_ops :SimpleOps"
+      }
+    ],
+    "programs": [
+      {
+        "name": "simple_select_cpu",
+        "kind": "struct_ops",
+        "attach_target": "SimpleOps",
+        "nargs": 3,
+        "ret": {
+          "kind": "int",
+          "bits": 32,
+          "signed": true,
+          "endianness": "little",
+          "alignment": 4
+        },
+        "maps": [
+          "Stats"
+        ],
+        "args": [
+          "task_struct",
+          {
+            "kind": "int",
+            "bits": 32,
+            "signed": true,
+            "endianness": "little",
+            "alignment": 4
+          },
+          {
+            "kind": "int",
+            "bits": 64,
+            "signed": false,
+            "endianness": "little",
+            "alignment": 8
+          }
+        ],
+        "note": "Ruby def simple_select_cpu"
+      },
+      {
+        "name": "simple_enqueue",
+        "kind": "struct_ops",
+        "attach_target": "SimpleOps",
+        "nargs": 2,
+        "ret": "void",
+        "maps": [
+          "Stats"
+        ],
+        "args": [
+          "task_struct",
+          {
+            "kind": "int",
+            "bits": 64,
+            "signed": false,
+            "endianness": "little",
+            "alignment": 8
+          }
+        ],
+        "note": "Ruby def simple_enqueue"
+      },
+      {
+        "name": "simple_dispatch",
+        "kind": "struct_ops",
+        "attach_target": "SimpleOps",
+        "nargs": 2,
+        "ret": "void",
+        "maps": [],
+        "note": "Ruby def simple_dispatch"
+      },
+      {
+        "name": "simple_running",
+        "kind": "struct_ops",
+        "attach_target": "SimpleOps",
+        "nargs": 1,
+        "ret": "void",
+        "maps": [],
+        "args": [
+          "task_struct"
+        ],
+        "note": "Ruby def simple_running"
+      },
+      {
+        "name": "simple_stopping",
+        "kind": "struct_ops",
+        "attach_target": "SimpleOps",
+        "nargs": 2,
+        "ret": "void",
+        "maps": [],
+        "args": [
+          "task_struct"
+        ],
+        "note": "Ruby def simple_stopping"
+      },
+      {
+        "name": "simple_enable",
+        "kind": "struct_ops",
+        "attach_target": "SimpleOps",
+        "nargs": 1,
+        "ret": "void",
+        "maps": [],
+        "args": [
+          "task_struct"
+        ],
+        "note": "Ruby def simple_enable"
+      },
+      {
+        "name": "simple_init",
+        "kind": "struct_ops",
+        "attach_target": "SimpleOps",
+        "nargs": 0,
+        "ret": {
+          "kind": "int",
+          "bits": 32,
+          "signed": true,
+          "endianness": "little",
+          "alignment": 4
+        },
+        "maps": [],
+        "sleepable": true,
+        "note": "Ruby def simple_init"
+      },
+      {
+        "name": "simple_exit",
+        "kind": "struct_ops",
+        "attach_target": "SimpleOps",
+        "nargs": 1,
+        "ret": "void",
+        "maps": [],
+        "args": [
+          "scx_exit_info"
+        ],
+        "note": "Ruby def simple_exit"
+      }
+    ],
+    "globals": [
+      {
+        "name": "FifoSched",
+        "section": "rodata",
+        "type": {
+          "kind": "int",
+          "bits": 8,
+          "signed": false,
+          "endianness": "little",
+          "alignment": 1
+        },
+        "note": "Ruby constant FifoSched (OptionalConfig)"
+      },
+      {
+        "name": "VtimeNow",
+        "section": "bss",
+        "type": {
+          "kind": "int",
+          "bits": 64,
+          "signed": false,
+          "endianness": "little",
+          "alignment": 8
+        },
+        "note": "Ruby constant VtimeNow (Global)"
+      },
+      {
+        "name": "Uei",
+        "section": "data",
+        "record": "user_exit_info",
+        "note": "Ruby constant Uei (ExitInfo)"
+      }
+    ]
+  },
+  "telemetry": {
+    "clocks": [],
+    "value_maps": [],
+    "bounds_sets": [],
+    "signals": []
+  },
+  "extensions": {}
+}

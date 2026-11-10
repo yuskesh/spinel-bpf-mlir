@@ -107,7 +107,7 @@ static int kread_bind(fe_prog_ctx *c, const sr_node *n, fe_stmt *out, bigint *nb
 		fe_var_info *vi = var_new(fe_width_range(f->bits, f->is_signed));
 		if (f->bits == 64 && !f->is_signed) {
 			vi->iv = fe_iv(intv_from_i64(0), intv_from_u64(UINT64_MAX));
-			vi->wide = 1; /* a u64 read: the 64 bits are held as i64, so the value is Wide like a u64 map value */
+			vi->wide = vi->kread = 1; /* a u64 read: the 64 bits are held as i64, so the value is Wide like a u64 map value */
 		}
 		fe_name_set(&c->env, vn, vi);
 	}

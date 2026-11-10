@@ -15,4 +15,4 @@ def on_send(ctx)
   end
 end
 BPF.fentry :on_send, "tcp_sendmsg", args: {0 => [:or_null, SockT]}
-# want: SB004 14:19
+# want: SB033 14:19

@@ -1,0 +1,68 @@
+{
+  "maps": [
+    {
+      "name": "Out",
+      "kind": "array",
+      "key": "u32",
+      "value": "u32",
+      "max_entries": 32
+    },
+    {
+      "name": "Tcpca",
+      "kind": "struct_ops",
+      "key": "u32",
+      "value": "-",
+      "max_entries": 1,
+      "struct_ops": {
+        "type": "tcp_congestion_ops",
+        "name": "rbcount",
+        "ops": [
+          {
+            "member": "init",
+            "program": "cc_init"
+          },
+          {
+            "member": "ssthresh",
+            "program": "cc_ssthresh"
+          },
+          {
+            "member": "undo_cwnd",
+            "program": "cc_undo_cwnd"
+          },
+          {
+            "member": "cong_avoid",
+            "program": "cc_cong_avoid"
+          },
+          {
+            "member": "set_state",
+            "program": "cc_set_state"
+          },
+          {
+            "member": "cwnd_event",
+            "program": "cc_cwnd_event"
+          },
+          {
+            "member": "in_ack_event",
+            "program": "cc_in_ack_event"
+          },
+          {
+            "member": "pkts_acked",
+            "program": "cc_pkts_acked"
+          },
+          {
+            "member": "min_tso_segs",
+            "program": "cc_min_tso_segs"
+          },
+          {
+            "member": "sndbuf_expand",
+            "program": "cc_sndbuf_expand"
+          },
+          {
+            "member": "release",
+            "program": "cc_release"
+          }
+        ]
+      }
+    }
+  ]
+}

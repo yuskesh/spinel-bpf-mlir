@@ -1,0 +1,149 @@
+{
+  "source": "scx_basic.rb",
+  "roots": [
+    {
+      "name": "basic_select_cpu",
+      "kind": "struct_ops",
+      "decl": {
+        "file": "scx_basic.rb",
+        "line": 74,
+        "col": 1
+      },
+      "def": {
+        "file": "scx_basic.rb",
+        "line": 15,
+        "col": 1
+      }
+    },
+    {
+      "name": "basic_enqueue",
+      "kind": "struct_ops",
+      "decl": {
+        "file": "scx_basic.rb",
+        "line": 74,
+        "col": 1
+      },
+      "def": {
+        "file": "scx_basic.rb",
+        "line": 30,
+        "col": 1
+      }
+    },
+    {
+      "name": "basic_dispatch",
+      "kind": "struct_ops",
+      "decl": {
+        "file": "scx_basic.rb",
+        "line": 74,
+        "col": 1
+      },
+      "def": {
+        "file": "scx_basic.rb",
+        "line": 42,
+        "col": 1
+      }
+    },
+    {
+      "name": "basic_running",
+      "kind": "struct_ops",
+      "decl": {
+        "file": "scx_basic.rb",
+        "line": 74,
+        "col": 1
+      },
+      "def": {
+        "file": "scx_basic.rb",
+        "line": 46,
+        "col": 1
+      }
+    },
+    {
+      "name": "basic_enable",
+      "kind": "struct_ops",
+      "decl": {
+        "file": "scx_basic.rb",
+        "line": 74,
+        "col": 1
+      },
+      "def": {
+        "file": "scx_basic.rb",
+        "line": 55,
+        "col": 1
+      }
+    },
+    {
+      "name": "basic_init",
+      "kind": "struct_ops",
+      "decl": {
+        "file": "scx_basic.rb",
+        "line": 74,
+        "col": 1
+      },
+      "def": {
+        "file": "scx_basic.rb",
+        "line": 62,
+        "col": 1
+      }
+    },
+    {
+      "name": "basic_exit",
+      "kind": "struct_ops",
+      "decl": {
+        "file": "scx_basic.rb",
+        "line": 74,
+        "col": 1
+      },
+      "def": {
+        "file": "scx_basic.rb",
+        "line": 70,
+        "col": 1
+      }
+    }
+  ],
+  "functions": [
+    {
+      "name": "basic_dispatch",
+      "membership": [
+        "bpf"
+      ]
+    },
+    {
+      "name": "basic_enable",
+      "membership": [
+        "bpf"
+      ]
+    },
+    {
+      "name": "basic_enqueue",
+      "membership": [
+        "bpf"
+      ]
+    },
+    {
+      "name": "basic_exit",
+      "membership": [
+        "bpf"
+      ]
+    },
+    {
+      "name": "basic_init",
+      "membership": [
+        "bpf"
+      ]
+    },
+    {
+      "name": "basic_running",
+      "membership": [
+        "bpf"
+      ]
+    },
+    {
+      "name": "basic_select_cpu",
+      "membership": [
+        "bpf"
+      ]
+    }
+  ],
+  "edges": [],
+  "diagnostics": []
+}

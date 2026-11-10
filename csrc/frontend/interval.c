@@ -227,9 +227,11 @@ fe_name_table fe_join_env(const fe_name_table *a, const fe_name_table *b)
 		if (!v->bool_)
 			v->iv = fe_union(va->iv, vb->iv);
 		v->from = fe_union_refs(&va->from, &vb->from);
+		v->kread = va->kread && vb->kread;
 		if (va->mixed || vb->mixed || va->wide != vb->wide) {
 			v->wide = 0;
 			v->mixed = 1;
+			v->kread = va->kread || vb->kread;
 		}
 		fe_name_set(&out, a->e[i].key, v);
 	}

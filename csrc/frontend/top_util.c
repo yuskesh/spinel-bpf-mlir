@@ -357,7 +357,8 @@ static const char *const ctx_class[][2] = {
     {"xdp", "XdpMd"}, {"fentry", "FentryCtx"}, {"fexit", "FexitCtx"}, {"kprobe", "KprobeCtx"}, {"kretprobe", "KretprobeCtx"},
     {"uretprobe", "UretprobeCtx"}, {"sched_cls", "SkBuff"}, {"uprobe", "UprobeCtx"}, {"tp_btf", "TpBtfCtx"}, {"raw_tp", "RawTpCtx"},
     {"socket_filter", "SocketFilterCtx"}, {"cgroup_skb", "CgroupSkb"}, {"tracepoint", "TracepointCtx"}, {"ksyscall", "KsyscallCtx"},
-    {"netfilter", "NfCtx"}, {"flow_dissector", "FlowCtx"}, {"sk_lookup", "SkLookupCtx"}, {"fmod_ret", "FmodRetCtx"}};
+    {"netfilter", "NfCtx"}, {"flow_dissector", "FlowCtx"}, {"sk_lookup", "SkLookupCtx"}, {"fmod_ret", "FmodRetCtx"},
+    {"struct_ops", "StructOpsCtx"}};
 
 /* ctxClass; NULL for a kind it lacks (Go's zero value "") */
 const char *t_ctx_class(sr_str kind)

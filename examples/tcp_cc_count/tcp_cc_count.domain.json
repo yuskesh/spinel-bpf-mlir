@@ -1,0 +1,229 @@
+{
+  "source": "tcp_cc_count.rb",
+  "roots": [
+    {
+      "name": "cc_init",
+      "kind": "struct_ops",
+      "decl": {
+        "file": "tcp_cc_count.rb",
+        "line": 61,
+        "col": 1
+      },
+      "def": {
+        "file": "tcp_cc_count.rb",
+        "line": 7,
+        "col": 1
+      }
+    },
+    {
+      "name": "cc_ssthresh",
+      "kind": "struct_ops",
+      "decl": {
+        "file": "tcp_cc_count.rb",
+        "line": 61,
+        "col": 1
+      },
+      "def": {
+        "file": "tcp_cc_count.rb",
+        "line": 11,
+        "col": 1
+      }
+    },
+    {
+      "name": "cc_undo_cwnd",
+      "kind": "struct_ops",
+      "decl": {
+        "file": "tcp_cc_count.rb",
+        "line": 61,
+        "col": 1
+      },
+      "def": {
+        "file": "tcp_cc_count.rb",
+        "line": 16,
+        "col": 1
+      }
+    },
+    {
+      "name": "cc_cong_avoid",
+      "kind": "struct_ops",
+      "decl": {
+        "file": "tcp_cc_count.rb",
+        "line": 61,
+        "col": 1
+      },
+      "def": {
+        "file": "tcp_cc_count.rb",
+        "line": 21,
+        "col": 1
+      }
+    },
+    {
+      "name": "cc_set_state",
+      "kind": "struct_ops",
+      "decl": {
+        "file": "tcp_cc_count.rb",
+        "line": 61,
+        "col": 1
+      },
+      "def": {
+        "file": "tcp_cc_count.rb",
+        "line": 25,
+        "col": 1
+      }
+    },
+    {
+      "name": "cc_cwnd_event",
+      "kind": "struct_ops",
+      "decl": {
+        "file": "tcp_cc_count.rb",
+        "line": 61,
+        "col": 1
+      },
+      "def": {
+        "file": "tcp_cc_count.rb",
+        "line": 29,
+        "col": 1
+      }
+    },
+    {
+      "name": "cc_in_ack_event",
+      "kind": "struct_ops",
+      "decl": {
+        "file": "tcp_cc_count.rb",
+        "line": 61,
+        "col": 1
+      },
+      "def": {
+        "file": "tcp_cc_count.rb",
+        "line": 39,
+        "col": 1
+      }
+    },
+    {
+      "name": "cc_pkts_acked",
+      "kind": "struct_ops",
+      "decl": {
+        "file": "tcp_cc_count.rb",
+        "line": 61,
+        "col": 1
+      },
+      "def": {
+        "file": "tcp_cc_count.rb",
+        "line": 43,
+        "col": 1
+      }
+    },
+    {
+      "name": "cc_min_tso_segs",
+      "kind": "struct_ops",
+      "decl": {
+        "file": "tcp_cc_count.rb",
+        "line": 61,
+        "col": 1
+      },
+      "def": {
+        "file": "tcp_cc_count.rb",
+        "line": 47,
+        "col": 1
+      }
+    },
+    {
+      "name": "cc_sndbuf_expand",
+      "kind": "struct_ops",
+      "decl": {
+        "file": "tcp_cc_count.rb",
+        "line": 61,
+        "col": 1
+      },
+      "def": {
+        "file": "tcp_cc_count.rb",
+        "line": 52,
+        "col": 1
+      }
+    },
+    {
+      "name": "cc_release",
+      "kind": "struct_ops",
+      "decl": {
+        "file": "tcp_cc_count.rb",
+        "line": 61,
+        "col": 1
+      },
+      "def": {
+        "file": "tcp_cc_count.rb",
+        "line": 57,
+        "col": 1
+      }
+    }
+  ],
+  "functions": [
+    {
+      "name": "cc_cong_avoid",
+      "membership": [
+        "bpf"
+      ]
+    },
+    {
+      "name": "cc_cwnd_event",
+      "membership": [
+        "bpf"
+      ]
+    },
+    {
+      "name": "cc_in_ack_event",
+      "membership": [
+        "bpf"
+      ]
+    },
+    {
+      "name": "cc_init",
+      "membership": [
+        "bpf"
+      ]
+    },
+    {
+      "name": "cc_min_tso_segs",
+      "membership": [
+        "bpf"
+      ]
+    },
+    {
+      "name": "cc_pkts_acked",
+      "membership": [
+        "bpf"
+      ]
+    },
+    {
+      "name": "cc_release",
+      "membership": [
+        "bpf"
+      ]
+    },
+    {
+      "name": "cc_set_state",
+      "membership": [
+        "bpf"
+      ]
+    },
+    {
+      "name": "cc_sndbuf_expand",
+      "membership": [
+        "bpf"
+      ]
+    },
+    {
+      "name": "cc_ssthresh",
+      "membership": [
+        "bpf"
+      ]
+    },
+    {
+      "name": "cc_undo_cwnd",
+      "membership": [
+        "bpf"
+      ]
+    }
+  ],
+  "edges": [],
+  "diagnostics": []
+}

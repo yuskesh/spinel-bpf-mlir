@@ -53,6 +53,9 @@ func keptSource(text string, res *Result) (string, error) {
 		mark(p.Pos.Line, p.EndLine)
 		mark(p.DeclPos.Line, p.DeclPos.Line)
 	}
+	for _, d := range res.StructOps { // a BPF.struct_ops declaration, all its lines (its keyword options continue without parentheses)
+		mark(d.Pos.Line, d.EndLine)
+	}
 	for _, f := range res.Funcs { // subprogram defs (the twin calls them natively as they are)
 		mark(f.Pos.Line, f.EndLine)
 	}
@@ -255,7 +258,7 @@ func harness(res *Result, prelude, put, run, runPkt, get string, kernel bool, ex
 			fmt.Fprintf(&b, "      elsif _h_f[1] == %q\n        puts \"ret=#{%s}\"\n", p.Name, fmt.Sprintf(runSF, p.Name))
 			continue
 		}
-		if usesKernelTypes(p) && !kernel { // the twin takes the struct members and integer arguments the test gives (also fentry programs with args)
+		if usesKernelTypes(p) && !kernel && p.Kind != "struct_ops" { // the twin takes the struct members and integer arguments the test gives (also fentry programs with args)
 			b.WriteString(tpBtfTwinRun(kw, p, res.KernelTypes))
 			continue
 		}
@@ -274,6 +277,8 @@ func harness(res *Result, prelude, put, run, runPkt, get string, kernel bool, ex
 		if p.Kind != "xdp" {
 			if kernel {
 				b.WriteString(tracingKernelRun(kw, p))
+			} else if p.Kind == "struct_ops" && len(p.TArgs) > 0 {
+				b.WriteString(soKptrTwinRun(kw, p, res.KernelTypes))
 			} else {
 				b.WriteString(tracingTwinRun(kw, p))
 			}
@@ -412,6 +417,25 @@ func tracingTwinRun(kw string, p *Program) string {
 		}
 		b.WriteString("          else\n            raise \"undeclared fmod_ret argument #{_h_kv[0]}\"\n          end\n          _h_i += 1\n        end\n")
 		fmt.Fprintf(&b, "        puts \"ret=#{%s(BPF::FmodRetCtx.new(_h_args))}\"\n", p.Name)
+		return b.String()
+	}
+	if p.Kind == "struct_ops" { // `run <prog> a<i>=<v>`: the member's integer arguments (cut to the table's width; unset are 0); ret= is an integer member's return, 0 for a void one
+		m := soMemberOf(p)
+		fmt.Fprintf(&b, "      %s _h_f[1] == %q\n        _h_args = Array.new(%d, 0)\n        _h_i = 2\n        while _h_i < _h_f.length\n          _h_kv = _h_f[_h_i].split(\"=\")\n          if false\n", kw, p.Name, len(m.Args))
+		for i, ar := range m.Args {
+			if ar.Kind == "int" || ar.Kind == "enum" {
+				fmt.Fprintf(&b, "          elsif _h_kv[0] == \"a%d\"\n            _h_args[%d] = %s\n", i, i, widthCut("_h_kv[1].to_i", ar.Type))
+			}
+		}
+		fmt.Fprintf(&b, "          else\n            raise \"not an integer argument of %s.%s: #{_h_kv[0]}\"\n          end\n          _h_i += 1\n        end\n", p.SOType, p.SOMember)
+		if p.Ret == "void" {
+			fmt.Fprintf(&b, "        %s(BPF::StructOpsCtx.new(_h_args))\n        puts \"ret=0\"\n", p.Name)
+		} else {
+			fmt.Fprintf(&b, "        puts \"ret=#{%s(BPF::StructOpsCtx.new(_h_args))}\"\n", p.Name)
+		}
+		if p.Scx {
+			b.WriteString(scxLogLines)
+		}
 		return b.String()
 	}
 	if p.Kind == "tracepoint" { // declared field name = value (cut to the declared type's width — unset fields are 0)
@@ -1477,15 +1501,20 @@ func globalConfigLoop(res *Result, kernel bool) string {
 		b.WriteString("_h_cfg = SpinelBPF::ConfigSet.new\n")
 	}
 	b.WriteString("_h_go = true\nwhile _h_go && (_h_line = $stdin.gets)\n  _h_f = _h_line.split(\" \")\n  if _h_f[0] == \"load\"\n    _h_go = false\n  elsif _h_f[0] == \"config\"\n")
-	for i, g := range res.Globals {
+	k := 0
+	for _, g := range res.Globals {
+		if g.Class == "ExitInfo" { // the .data exit record is not set or dumped by the harness
+			continue
+		}
 		kw := "if"
-		if i > 0 {
+		k++
+		if k > 1 {
 			kw = "elsif"
 		}
 		switch {
 		case !kernel:
 			fmt.Fprintf(&b, "    %s _h_f[1] == %q\n      BPF.set_global(%q, _h_f[2].to_i)\n", kw, g.Name, g.Name)
-		case g.Counter():
+		case g.Counter() || g.Class == "Global":
 			fmt.Fprintf(&b, "    %s _h_f[1] == %q\n      raise \"%s is a Counter (.bss) — it has no load-time value\"\n", kw, g.Name, g.Name)
 		case g.Optional:
 			fmt.Fprintf(&b, "    %s _h_f[1] == %q\n      _h_cfg.set_optional(%s, _h_f[2].to_i)\n", kw, g.Name, g.Const)
@@ -1505,6 +1534,9 @@ func globalConfigLoop(res *Result, kernel bool) string {
 func globalDump(res *Result, kernel bool) string {
 	var b strings.Builder
 	for _, g := range res.Globals {
+		if g.Class == "ExitInfo" {
+			continue
+		}
 		get := g.Const + ".value"
 		if kernel {
 			m := "config_get"
@@ -1587,4 +1619,83 @@ func parenDelta(line string) int {
 		}
 	}
 	return d
+}
+
+// scxLogLines print the sched_ext ops a call made (the twin's models log them), then clear the log.
+const scxLogLines = "        _h_li = 0\n        while _h_li < BPF::Scx::LOG.length\n          puts \"scx=#{BPF::Scx::LOG[_h_li]}\"\n          _h_li += 1\n        end\n        BPF::Scx::LOG.clear\n"
+
+// soKptrNames are the quoted `<pre>.<m>` names a run may set: the integer members, and those of an embedded struct
+// (`a0.scx.dsq_vtime`), as twinKPtr reads them.
+func soKptrNames(pre string, d *KernelTypeDecl, byConst map[string]*KernelTypeDecl) []string {
+	var ok []string
+	for _, f := range d.Fields {
+		switch f.Kind {
+		case "int":
+			ok = append(ok, fmt.Sprintf("%q", pre+"."+f.Name))
+		case "struct":
+			if e := byConst[f.Ptr]; e != nil {
+				ok = append(ok, soKptrNames(pre+"."+f.Name, e, byConst)...)
+			}
+		}
+	}
+	return ok
+}
+
+// soKptrTwinRun writes the twin's `run <prog> [a<i>=<v> …] [a<s>.<m>=<v> …] [a<s>=null]` for a struct_ops program that reads its
+// socket argument s: integer arguments are cut to the member table's width, the tcp_sock is the kernel type's Struct
+// built from the given members (0 when not given), `a<s>=null` makes it NULL. It prints `ret=<v>` (0 for a void member) and then,
+// for a present socket, `f.<m>=<v>` for each integer member of the Struct after the call (the stores the callback made).
+func soKptrTwinRun(kw string, p *Program, kts []*KernelTypeDecl) string {
+	byConst := map[string]*KernelTypeDecl{}
+	for _, d := range kts {
+		byConst[d.Const] = d
+	}
+	m := soMemberOf(p)
+	var ok []string
+	for i, ar := range m.Args {
+		if ar.Kind == "int" || ar.Kind == "enum" {
+			ok = append(ok, fmt.Sprintf("%q", fmt.Sprintf("a%d", i)))
+		}
+	}
+	for _, a := range p.TArgs {
+		ok = append(ok, fmt.Sprintf("%q", fmt.Sprintf("a%d", a.Idx)))
+		ok = append(ok, soKptrNames(fmt.Sprintf("a%d", a.Idx), a.KT, byConst)...)
+	}
+	var b strings.Builder
+	fmt.Fprintf(&b, "      %s _h_f[1] == %q\n        _h_n = Array.new(0, \"\")\n        _h_v = Array.new(0, 0)\n        _h_s = Array.new(0, \"\")\n        _h_ok = [%s]\n        _h_i = 2\n        while _h_i < _h_f.length\n          _h_kv = _h_f[_h_i].split(\"=\")\n          if !_h_ok.include?(_h_kv[0])\n            raise \"not an argument of %s.%s: #{_h_kv[0]}\"\n          end\n          _h_n.push(_h_kv[0])\n          _h_v.push(_h_kv[1].to_i)\n          _h_i += 1\n        end\n        _h_args = Array.new(%d, 0)\n", kw, p.Name, strings.Join(ok, ", "), p.SOType, p.SOMember, len(m.Args))
+	for i, ar := range m.Args {
+		if ar.Kind == "int" || ar.Kind == "enum" {
+			fmt.Fprintf(&b, "        _h_args[%d] = %s\n", i, widthCut(fmt.Sprintf("_h_fv(_h_n, _h_v, %q)", fmt.Sprintf("a%d", i)), ar.Type))
+		}
+	}
+	var kps, idx []string
+	for _, a := range p.TArgs {
+		v := fmt.Sprintf("_h_kp%d", a.Idx)
+		twinKPtr(&b, v, a.KT, fmt.Sprintf("a%d", a.Idx), "        ", byConst)
+		kps = append(kps, v)
+		idx = append(idx, fmt.Sprint(a.Idx))
+	}
+	fmt.Fprintf(&b, "        _h_ks = [%s]\n", strings.Join(kps, ", "))
+	for k, a := range p.TArgs {
+		fmt.Fprintf(&b, "        if _h_n.include?(\"a%d\")\n          _h_ks[%d] = nil\n        end\n", a.Idx, k)
+	}
+	call := fmt.Sprintf("%s(BPF::StructOpsCtx.new(_h_args, _h_ks, [%s]))", p.Name, strings.Join(idx, ", "))
+	if p.Ret == "void" {
+		fmt.Fprintf(&b, "        %s\n        puts \"ret=0\"\n", call)
+	} else {
+		fmt.Fprintf(&b, "        puts \"ret=#{%s}\"\n", call)
+	}
+	if p.Scx {
+		b.WriteString(scxLogLines)
+	}
+	for k, a := range p.TArgs {
+		fmt.Fprintf(&b, "        if _h_ks[%d]\n", k)
+		for _, f := range a.KT.Fields {
+			if f.Kind == "int" {
+				fmt.Fprintf(&b, "          puts \"f.%s=#{_h_kp%d.load.%s}\"\n", f.Name, a.Idx, f.Name)
+			}
+		}
+		b.WriteString("        end\n")
+	}
+	return b.String()
 }

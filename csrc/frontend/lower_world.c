@@ -12,7 +12,7 @@ static const char *const allowed_ops[] = {
 	"arith.constant",
 	"ebpf.if", "ebpf.if.yield",
 	"arith.addi", "arith.subi", "arith.muli", "arith.andi", "arith.ori", "arith.xori",
-	"arith.shli", "arith.shrsi", "arith.shrui", "arith.divui", "arith.remui",
+	"arith.shli", "arith.shrsi", "arith.shrui", "arith.divui", "arith.remui", "arith.maxui",
 	"arith.floordivsi", "arith.remsi", "arith.cmpi", "arith.select",
 	"arith.extui", "arith.extsi", "arith.trunci",
 	"ebpf.packet.check", "ebpf.packet.window_load", "ebpf.byteorder.from_be",
@@ -20,7 +20,10 @@ static const char *const allowed_ops[] = {
 	"ebpf.global.load", "ebpf.global.atomic_add",
 	"ebpf.ctx.retval", "ebpf.kprobe.arg", "ebpf.probe.retval", "ebpf.task.pid_tgid",
 	"ebpf.uprobe.arg", "ebpf.user.read_str", "ebpf.ringbuf.store_field",
-	"ebpf.ctx.arg", "ebpf.kfield.load",
+	"ebpf.ctx.arg", "ebpf.kfield.load", "ebpf.kfield.store",
+	"module", "ebpf.global.store", /* the module attribute ebpf.scx_kfuncs, and a Global's write */
+	"ebpf.scx.select_cpu_dfl", "ebpf.scx.dsq_insert", "ebpf.scx.dsq_insert_vtime", "ebpf.scx.dsq_move_to_local", /* the sched_ext ops */
+	"ebpf.scx.create_dsq", "ebpf.scx.task_set_dsq_vtime", "ebpf.scx.error", "ebpf.scx.exit_info", "ebpf.scx.const",
 	"ebpf.ctx.field",
 	"ebpf.ctx.field.store",
 	"ebpf.xdp.adjust_head",

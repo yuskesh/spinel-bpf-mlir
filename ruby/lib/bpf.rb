@@ -172,6 +172,102 @@ module BPF
     end
   end
 
+  #   X = BPF::Global.new("X", :u64)          .bss — :u8 … :u64 / :i8 … :i64, read with X.value and written with X.set(v) (ebpf.global.store,
+  #                                            not atomic: concurrent writes race as in C). `store` is not its name: Spinel types x.store
+  #                                            as Hash#store, so X.store is refused by name.
+  class Global
+    def initialize(name, type)
+      @name = name
+      @type = type.to_s
+    end
+
+    def global_name
+      @name
+    end
+
+    def global_type
+      @type
+    end
+
+    def value
+      BPF.ebpf_only("BPF::Global#value")
+    end
+
+    def set(v)
+      BPF.ebpf_only("BPF::Global#set")
+    end
+
+    def store(v)
+      BPF.ebpf_only("BPF::Global#store")
+    end
+  end
+
+  #   U = BPF::ExitInfo.new("U")               .data — the 1168-byte user_exit_info record that BPF::Scx.exit_info(ctx, U) fills in a
+  #                                            sched_ext_ops exit callback. It has no method on the eBPF side.
+  class ExitInfo
+    def initialize(name)
+      @name = name
+    end
+
+    def global_name
+      @name
+    end
+
+    def value
+      BPF.ebpf_only("BPF::ExitInfo#value")
+    end
+  end
+
+  # sched_ext: the ops a sched_ext_ops callback calls, one Ruby call per bpf-mlir ebpf.scx op. A task argument p is the
+  # checked task pointer (`p = ctx.kptr_or_null(0, TaskT)` then `if p`). DSQ_LOCAL and SLICE_DFL are read at load from the kernel
+  # (ebpf.scx.const); the values here are 7.3.1's. The OPS_* flags are for the `flags:` data member of BPF.struct_ops.
+  module Scx
+    DSQ_LOCAL = -9223372036854775806
+    SLICE_DFL = 20000000
+    OPS_KEEP_BUILTIN_IDLE = 1
+    OPS_ENQ_LAST = 2
+    OPS_ENQ_EXITING = 4
+    OPS_SWITCH_PARTIAL = 8
+    OPS_ENQ_MIGRATION_DISABLED = 16
+    OPS_ALLOW_QUEUED_WAKEUP = 32
+    OPS_BUILTIN_IDLE_PER_NODE = 64
+    OPS_ALWAYS_ENQ_IMMED = 128
+    OPS_TID_TO_TASK = 256
+
+    def self.select_cpu_dfl(p, prev, wake)
+      c = BPF.ebpf_only("BPF::Scx.select_cpu_dfl")
+      [c, c == 0]
+    end
+
+    def self.dsq_insert(p, dsq, slice, flags)
+      BPF.ebpf_only("BPF::Scx.dsq_insert")
+    end
+
+    def self.dsq_insert_vtime(p, dsq, slice, vtime, flags)
+      BPF.ebpf_only("BPF::Scx.dsq_insert_vtime")
+    end
+
+    def self.dsq_move_to_local(dsq)
+      BPF.ebpf_only("BPF::Scx.dsq_move_to_local") == 0
+    end
+
+    def self.create_dsq(dsq, node)
+      BPF.ebpf_only("BPF::Scx.create_dsq")
+    end
+
+    def self.task_set_dsq_vtime(p, vtime)
+      BPF.ebpf_only("BPF::Scx.task_set_dsq_vtime")
+    end
+
+    def self.error(fmt, a0 = 0, a1 = 0, a2 = 0, a3 = 0, a4 = 0, a5 = 0, a6 = 0, a7 = 0, a8 = 0, a9 = 0, a10 = 0, a11 = 0)
+      BPF.ebpf_only("BPF::Scx.error")
+    end
+
+    def self.exit_info(ctx, uei)
+      BPF.ebpf_only("BPF::Scx.exit_info")
+    end
+  end
+
   # Tracing contexts. fentry has nothing to read (helpers only), fexit has ctx.ret (the declared ret type), kprobe has ctx.arg(n) (n and type from the declared params).
   # The fentry context: a struct argument declared with `args:` is read as `q = ctx.kptr_or_null(i, T)` followed by `if q` (an fentry
   # pointer may always be NULL). An integer argument is `ctx.arg(i)` (of the declared type).
@@ -191,6 +287,27 @@ module BPF
   class FexitCtx
     def ret
       BPF.ebpf_only("BPF::FexitCtx#ret")
+    end
+  end
+
+  # The struct_ops context: an integer argument of the member is `ctx.arg(i)` (the member table gives its type), and the
+  # socket argument is `tp = ctx.kptr_or_null(i, T)` followed by `if tp` (T a kernel type named "tcp_sock" — the verifier's
+  # promotion of struct sock *). `ctx.kptr` is defined only so that the frontend can refuse it by name.
+  class StructOpsCtx
+    def arg(i)
+      BPF.ebpf_only("BPF::StructOpsCtx#arg")
+    end
+
+    def kptr_or_null(i, t)
+      if BPF.ebpf_only("BPF::StructOpsCtx#kptr_or_null") == 0
+        return KPtr.new(t.sample)
+      end
+      nil
+    end
+
+    def kptr(i, t)
+      BPF.ebpf_only("BPF::StructOpsCtx#kptr")
+      KPtr.new(t.sample)
     end
   end
 
@@ -365,6 +482,12 @@ module BPF
     def copy(field)
       BPF.ebpf_only("BPF::KPtr#copy")
       Array.new(0, 0)
+    end
+
+    # struct_ops only: write integer field m of the checked socket pointer (ebpf.kfield.store); the value must fit the field.
+    # Not `store`: Spinel types `x.store(k, v)` on a callback pointer as Hash#store
+    def set_field(field, v)
+      BPF.ebpf_only("BPF::KPtr#set_field")
     end
 
     # All 64 bits of a checked kernel pointer's address (bpf-mlir's ebpf.kptr.addr) — an integer for map keys, events and comparisons.
@@ -563,6 +686,28 @@ module BPF
   # ktime_ns is the monotonic clock in ns (u64 — the eBPF side only copies it to a u64 member or map, or applies `& M` / `>> K`).
   def self.ktime_ns
     BPF.ebpf_only("BPF.ktime_ns")
+  end
+
+  # The u64 intrinsics: modular u64 arithmetic on the eBPF side (a u64 operand is a u64 value or a non-negative Integer;
+  # u64_div's divisor is an Integer the frontend proves to be within [1, 2^63 − 1]). time_before(a, b) is (s64)(a − b) < 0.
+  def self.u64_add(a, b)
+    BPF.ebpf_only("BPF.u64_add")
+  end
+
+  def self.u64_sub(a, b)
+    BPF.ebpf_only("BPF.u64_sub")
+  end
+
+  def self.u64_mul(a, b)
+    BPF.ebpf_only("BPF.u64_mul")
+  end
+
+  def self.u64_div(a, d)
+    BPF.ebpf_only("BPF.u64_div")
+  end
+
+  def self.time_before(a, b)
+    BPF.ebpf_only("BPF.time_before") != 0
   end
 
   # Declares the widths of a record's members (`BPF.record(S, m: :u16, …)` — S is a Struct). Read by the frontend; does nothing at run time.
@@ -1410,6 +1555,11 @@ module BPF
   # Declares an fmod_ret program (`BPF.fmod_ret :name, "kernel_function", nargs: N, args: {0 => :i32}`). nargs is the target's argument count,
   # args the integer arguments (ctx.arg(i)); the return value is i32. Checked against the target's FUNC_PROTO before load (retsig, farg). At run time it only returns the name.
   def self.fmod_ret(name, target, opts)
+    name
+  end
+
+  # Declares a struct_ops table: `BPF.struct_ops :Map, "tcp_congestion_ops", name: "kname", member: :callback, …`. At run time it only returns the name.
+  def self.struct_ops(name, type, opts)
     name
   end
 

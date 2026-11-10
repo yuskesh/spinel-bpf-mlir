@@ -394,6 +394,24 @@ void t_scan_top(t_ctx *c, int64_t fid)
 			} else if (sr_eqc(nm, "require_relative") || sr_eqc(nm, "load")) {
 				t_add(c->z, FE_REJECTED, FE_SB001, t_pos(c, n),
 				      "`%s` is not accepted (the program is one file plus `require \"bpf\"`)", nm);
+			} else if (sr_eqc(nm, "struct_ops") && sr_eqc(t_const_name(a, t_ref(a, n, "receiver")), "BPF")) {
+				fe_struct_ops_decl *sd;
+				fe_root_decl *rs;
+				size_t nrs;
+				if (!t_struct_ops_decl(c, n, &sd, &rs, &nrs))
+					continue;
+				T_PUSH(t->struct_ops, t->n_struct_ops, sd);
+				t->struct_ops_nil = 0;
+				for (size_t j = 0; j < nrs; j++) {
+					if (fe_name_has(&seen, rs[j].name)) {
+						t_add(c->z, FE_REJECTED, FE_SB008, t_pos(c, n),
+						      "`BPF.struct_ops :%s` uses the callback :%s twice (or it is declared as another root too)",
+						      sd->const_name, rs[j].name);
+						continue;
+					}
+					fe_name_set(&seen, rs[j].name, (void *)1);
+					T_PUSH(roots, n_roots, rs[j]);
+				}
 			} else if (t_root_kind(nm) && sr_eqc(t_const_name(a, t_ref(a, n, "receiver")), "BPF")) {
 				fe_root_decl r;
 				if (!t_root_call(c, n, &r))

@@ -1,5 +1,36 @@
 # Release notes
 
+## v0.11.0
+
+- **Added, struct_ops:** `BPF.struct_ops` declares a table of kernel callbacks filled with
+  eBPF programs, for `tcp_congestion_ops` and `sched_ext_ops`.
+  - In a `tcp_congestion_ops` member, the socket argument is read only as
+    `tp = ctx.kptr_or_null(i, T)`, with `T` a `tcp_sock` kernel type, followed by `if tp`.
+    An integer field of it is written with `tp.set_field(:m, v)`, and only when `v` fits
+    the field.
+  - In `sched_ext_ops`: the `BPF::Scx` ops and constants, `BPF::Global` (a `.bss` value
+    with `value` and `set`) and `BPF::ExitInfo` (the exit record).
+  - On the user side, `SpinelBPF` registers a table and returns its link, which detaches
+    and closes it.
+  - Four new examples: `tcp_cc_count`, `tcp_cc_reno`, `scx_basic` and `scx_simple`.
+  - Measured in a VM on Linux 7.3.1 only.
+- **Added, u64 values:** a local that holds a u64 value (from `ctx.read(…, :u64)`, a u64
+  map value or an intrinsic) is accepted. It may be copied, joined with another u64 value,
+  masked, shifted right, stored into a u64 slot or passed to a u64 operand. v0.10.0 refused
+  the copy to a local with SB014. Its other uses still stop with SB014, SB001 or SB005. New
+  intrinsics: `BPF.u64_add`, `BPF.u64_sub` and `BPF.u64_mul` (modular), `BPF.u64_div` (the
+  divisor in 1..2^63 − 1) and `BPF.time_before`.
+- **Changed, refused programs:** a `return` in a program of a kind with no verdict
+  (fentry, fexit, kprobe, kretprobe, uprobe, uretprobe, tp_btf, raw_tp, tracepoint and
+  ksyscall) now stops with SB008 at the `return`. v0.10.0 dropped it silently, so an early
+  `return if c` did not return. To keep such a program, use `if`/`else` instead.
+- **Changed, Spinel:** the pinned Spinel is commit 0d58c397. It fixes wrong line numbers in
+  a file where a comment holds the word `break`. One refusal changes its code: reading an
+  undeclared field through an embedded kernel struct (`sk.load.__sk_common.skc_nope`) stops
+  with SB033 instead of SB004, at the same position.
+- **Changed, dependencies:** bpf-mlir v1.23.0, go-bpf-mlir v0.21.0 and bpf-mlir-loader
+  v0.2.0 (from v1.22.0, v0.20.0 and v0.1.1).
+
 ## v0.10.0
 
 - **Changed, accepted programs:** a value read by `v, st = ctx.read(n, off, :u64)` is now
@@ -80,19 +111,19 @@
   and the `SpinelBPF` library), the reason codes and the generated file formats can
   change in the next release. Changes are named in that release's notes.
 - Reason codes are never renumbered or reused. New codes are appended. SB012 is retired.
-- `spinelbpf --version` prints `spinel-bpf-mlir v0.10.0 (commit <build commit>[+dirty])`.
+- `spinelbpf --version` prints `spinel-bpf-mlir v0.11.0 (commit <build commit>[+dirty])`.
   The version is written only into the second line of each generated `.mlir`
-  (`// spinel-bpf-mlir v0.10.0`). Schemas, maps.json, domain.json and ELF objects carry
+  (`// spinel-bpf-mlir v0.11.0`). Schemas, maps.json, domain.json and ELF objects carry
   no version.
 
 ### Dependencies
 
 | Dependency | Version |
 |---|---|
-| bpf-mlir (`ebpf-compile`) | v1.22.0 |
-| go-bpf-mlir (Go packages) | v0.20.0 |
-| bpf-mlir-loader | v0.1.1 |
-| Spinel | commit 086d514d |
+| bpf-mlir (`ebpf-compile`) | v1.23.0 |
+| go-bpf-mlir (Go packages) | v0.21.0 |
+| bpf-mlir-loader | v0.2.0 |
+| Spinel | commit 0d58c397 |
 | LLVM / MLIR | 23.1.1 |
 | Go | 1.27 |
 

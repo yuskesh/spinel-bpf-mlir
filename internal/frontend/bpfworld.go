@@ -20,7 +20,7 @@ var allowedOps = map[string]bool{
 	// operators, comparisons, Bool, width changes, if
 	"ebpf.if": true, "ebpf.if.yield": true,
 	"arith.addi": true, "arith.subi": true, "arith.muli": true, "arith.andi": true, "arith.ori": true, "arith.xori": true,
-	"arith.shli": true, "arith.shrsi": true, "arith.shrui": true, "arith.divui": true, "arith.remui": true,
+	"arith.shli": true, "arith.shrsi": true, "arith.shrui": true, "arith.divui": true, "arith.remui": true, "arith.maxui": true, // maxui: BPF.u64_div's divisor
 	"arith.floordivsi": true, "arith.remsi": true, "arith.cmpi": true, "arith.select": true,
 	"arith.extui": true, "arith.extsi": true, "arith.trunci": true,
 	// reads from a checked packet window (the unchecked ebpf.packet.load is left out — out of range it silently reads 0)
@@ -32,6 +32,10 @@ var allowedOps = map[string]bool{
 	"ebpf.ctx.retval": true, "ebpf.kprobe.arg": true, "ebpf.probe.retval": true /* kretprobe / uretprobe return value */, "ebpf.task.pid_tgid": true,
 	"ebpf.uprobe.arg": true, "ebpf.user.read_str": true, "ebpf.ringbuf.store_field": true, // uprobe and output_str
 	"ebpf.ctx.arg": true, "ebpf.kfield.load": true, // tp_btf and CO-RE (compile once, run everywhere)
+	"ebpf.kfield.store": true,                            // struct_ops: a field write of the checked socket
+	"module":            true, "ebpf.global.store": true, // the module attribute ebpf.scx_kfuncs, and a Global's write
+	"ebpf.scx.select_cpu_dfl": true, "ebpf.scx.dsq_insert": true, "ebpf.scx.dsq_insert_vtime": true, "ebpf.scx.dsq_move_to_local": true, // the sched_ext ops
+	"ebpf.scx.create_dsq": true, "ebpf.scx.task_set_dsq_vtime": true, "ebpf.scx.error": true, "ebpf.scx.exit_info": true, "ebpf.scx.const": true,
 	"ebpf.ctx.field":       true,                               // socket_filter's __sk_buff len, and raw_tp's args[i]
 	"ebpf.ctx.field.store": true,                               // sched_cls writing __sk_buff's mark
 	"ebpf.xdp.adjust_head": true,                               // the head of an XDP packet

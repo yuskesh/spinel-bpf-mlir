@@ -92,7 +92,7 @@ func (c *progCtx) kreadBind(n *Node) (Stmt, bool) {
 		vi := &varInfo{Iv: widthRange(f.Bits, f.Signed)}
 		if f.Bits == 64 && !f.Signed {
 			vi.Iv = iv(new(big.Int), new(big.Int).Set(u64Max))
-			vi.Wide = true // the 64 bits are held as i64, so the value is Wide like a u64 map value
+			vi.Wide, vi.Kread = true, true // the 64 bits are held as i64, so the value is Wide like a u64 map value
 		}
 		c.env[vn] = vi
 	}

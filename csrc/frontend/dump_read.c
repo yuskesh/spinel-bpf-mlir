@@ -325,6 +325,26 @@ static void skip_subtree(rd *r, sr_str path, sr_str next)
 	die(r, "%s: no %s after it", cs(path), cs(next));
 }
 
+/* skip_prefix: a subtree with no fixed next path (the last field of a program): `path = nil`, or every line under `path.` */
+static void skip_prefix(rd *r, sr_str path)
+{
+	if (at(r, cat(path, " = "))) {
+		sr_str v = expect(r, path);
+		if (!sr_eqc(v, "nil"))
+			die(r, "%s: nil or its fields: %s", cs(path), cs(v));
+		return;
+	}
+	sr_str k = cat(path, ".");
+	if (!at(r, k))
+		expect_path(r, path);
+	while (at(r, k)) {
+		size_t p = r->pos;
+		while (p < r->n && r->t[p] != '\n')
+			p++;
+		r->pos = p < r->n ? p + 1 : p;
+	}
+}
+
 /* ---- declarations ---- */
 
 static void *new_obj(int kind)
@@ -561,6 +581,16 @@ static fe_program *read_program(rd *r, sr_str path)
 	p->end_line = v_int(r, cat(path, ".EndLine"));
 	p->maps = (fe_map_decl **)v_decls(r, cat(path, ".Maps"), K_MAP, &p->n_maps, &p->maps_nil);
 	p->rings = (fe_ring_decl **)v_decls(r, cat(path, ".Rings"), K_RING, &p->n_rings, &p->rings_nil);
+	p->so_type = v_str(r, cat(path, ".SOType"));
+	p->so_member = v_str(r, cat(path, ".SOMember"));
+	x = cat(path, ".SOArgs");
+	int so_nil;
+	p->n_so_args = v_len(r, x, &so_nil);
+	p->so_args = sr_alloc((p->n_so_args + 1) * sizeof *p->so_args);
+	for (size_t i = 0; i < p->n_so_args; i++)
+		p->so_args[i] = v_int(r, idx(x, i));
+	skip_prefix(r, cat(path, ".SOVal"));
+	p->scx = v_bool(r, cat(path, ".Scx"));
 	return p;
 }
 
@@ -651,6 +681,42 @@ static void read_result(rd *r, fe_result *res)
 	res->kernel_types =
 	    (fe_kernel_type_decl **)v_decls(r, cat(path, ".KernelTypes"), K_KTYPE, &res->n_kernel_types, &res->kernel_types_nil);
 	res->funcs = read_programs(r, cat(path, ".Funcs"), &res->n_funcs, &res->funcs_nil);
+	sr_str so = cat(path, ".StructOps");
+	res->n_struct_ops = v_len(r, so, &res->struct_ops_nil);
+	res->struct_ops = sr_alloc((res->n_struct_ops + 1) * sizeof *res->struct_ops);
+	for (size_t i = 0; i < res->n_struct_ops; i++) {
+		sr_str e = idx(so, i);
+		fe_struct_ops_decl *d = sr_alloc(sizeof *d);
+		d->const_name = v_str(r, cat(e, ".Const"));
+		d->type = v_str(r, cat(e, ".Type"));
+		d->kname = v_str(r, cat(e, ".KName"));
+		sr_str o = cat(e, ".Ops");
+		d->n_ops = v_len(r, o, &d->ops_nil);
+		d->ops = sr_alloc((d->n_ops + 1) * sizeof *d->ops);
+		for (size_t j = 0; j < d->n_ops; j++) {
+			d->ops[j].member = v_str(r, cat(idx(o, j), ".Member"));
+			d->ops[j].program = v_str(r, cat(idx(o, j), ".Program"));
+		}
+		sr_str dx = cat(e, ".Data"); /* the keys are the three data members, sorted */
+		int data_nil;
+		size_t nd = v_len(r, dx, &data_nil);
+		static const char *const dk[] = {"dispatch_max_batch", "flags", "timeout_ms"};
+		d->data_keys = sr_alloc((nd + 1) * sizeof *d->data_keys);
+		d->data_vals = sr_alloc((nd + 1) * sizeof *d->data_vals);
+		for (int q = 0; q < 3 && d->n_data < nd; q++) {
+			sr_str kp = cat(dx, "[\"");
+			kp = cat(cat(kp, dk[q]), "\"]");
+			if (!at(r, kp))
+				continue;
+			d->data_keys[d->n_data] = sr_cstr(dk[q]);
+			d->data_vals[d->n_data++] = (uint64_t)v_int(r, kp);
+		}
+		if (d->n_data != nd)
+			die(r, "%s: want %zu data members, read %zu", cs(dx), nd, d->n_data);
+		d->pos = v_pos(r, cat(e, ".Pos"));
+		d->end_line = v_int(r, cat(e, ".EndLine"));
+		res->struct_ops[i] = d;
+	}
 	read_membership(r, cat(path, ".Membership"), res);
 	sr_str x = cat(path, ".Edges");
 	res->n_edges = v_len(r, x, &res->edges_nil);
@@ -777,7 +843,7 @@ sr_result fe_read_dump(sr_str text, fe_result *out)
 }
 
 /* the restricted-c3 filter. A skipped field's subtree is the text from the line "<prog>.<field> = " to the line that starts the
- * next field the dumper prints (FRet -> FBorrow, Body -> Verdict, RedirKey -> GuardVerdict, FmodVal -> FmodGuard), where <prog> is
+ * next field the dumper prints (FRet -> FBorrow, Body -> Verdict, RedirKey -> GuardVerdict, FmodVal -> FmodGuard; SOVal line by line — Scx, the last field, is not under it), where <prog> is
  * result.Programs[i] or result.Funcs[i]; its lines can hold raw ids with newlines, so the end is found by the next field's path. */
 void fe_dump_restrict(sr_buf *out, sr_str dump)
 {
@@ -801,6 +867,11 @@ void fe_dump_restrict(sr_buf *out, sr_str dump)
 			if (k == s + pl || k >= s + len || dump.p[k] != ']')
 				continue;
 			sr_str prog = {dump.p + s, k + 1 - s};
+			/* SOVal is a program's last field, so its subtree has no next path: each of its lines starts with
+			 * "<prog>.SOVal = " or "<prog>.SOVal." (its strings are quoted ASCII — no raw newline) and is dropped (skip_prefix) */
+			if (s + len - (k + 1) >= 9 && memcmp(dump.p + k + 1, ".SOVal", 6) == 0 &&
+			    (memcmp(dump.p + k + 7, " = ", 3) == 0 || dump.p[k + 7] == '.'))
+				goto drop;
 			for (size_t q = 0; q < 4; q++) {
 				size_t fl = strlen(skip[q][0]);
 				/* "<prog><field> = " or "<prog><field>." (a non-nil expression's first field) */

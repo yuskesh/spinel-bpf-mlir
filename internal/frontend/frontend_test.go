@@ -18,6 +18,7 @@ var wantLine = regexp.MustCompile(`(?m)^# want: (SB\d{3}) (\d+):(\d+)$`)
 // It checks the stop was for the intended reason: every want is present, and every stopping code is one of the want codes
 // (a different code mixed in is a failure).
 func TestNegative(t *testing.T) {
+	t.Parallel()
 	sp := testSpinel(t)
 	files, _ := filepath.Glob(filepath.Join("testdata", "neg", "*.rb"))
 	if len(files) < 30 {
@@ -81,6 +82,7 @@ func checkNegative(t *testing.T, sp Spinel, f string) {
 
 // TestPositive checks that each file in testdata/pos generates and passes ebpf-opt, ebpf-compile and ebpf-schema-check.
 func TestPositive(t *testing.T) {
+	t.Parallel()
 	sp := testSpinel(t)
 	files, _ := filepath.Glob(filepath.Join("testdata", "pos", "*.rb"))
 	if len(files) == 0 {
@@ -130,6 +132,7 @@ func compileAll(t *testing.T, out *Output) []byte {
 // TestGoldenExample checks that the committed outputs of examples/xdpcount are byte-identical to the current frontend's output
 // (reproducible outputs — it stops a commit that did not regenerate them).
 func TestGoldenExample(t *testing.T) {
+	t.Parallel()
 	root := repoRoot(t)
 	dir := filepath.Join(root, "examples", "xdpcount")
 	out, err := Generate(testSpinel(t), t.TempDir(), filepath.Join(dir, "xdpcount.rb"))
@@ -151,6 +154,7 @@ func TestGoldenExample(t *testing.T) {
 
 // TestGenerateTwice checks that generating twice from the same source gives byte-identical output (the frontend stage).
 func TestGenerateTwice(t *testing.T) {
+	t.Parallel()
 	src := filepath.Join(repoRoot(t), "examples", "xdpcount", "xdpcount.rb")
 	a, err := Generate(testSpinel(t), t.TempDir(), src)
 	if err != nil {
@@ -168,6 +172,7 @@ func TestGenerateTwice(t *testing.T) {
 // TestInjectionWrongClass is a negative control for type injection (giving Spinel the root's argument types): injecting a String
 // argument stops with SB010.
 func TestInjectionWrongClass(t *testing.T) {
+	t.Parallel()
 	src := filepath.Join(repoRoot(t), "examples", "xdpcount", "xdpcount.rb")
 	text, _ := os.ReadFile(src)
 	res, err := analyze(testSpinel(t), t.TempDir(), src, string(text), analyzeOpts{inject: `"not a context"`})
@@ -182,6 +187,7 @@ func TestInjectionWrongClass(t *testing.T) {
 // TestInjectionComparator is a negative control for the comparator (which compares the types with and without injection): changing
 // one record outside the root in the injected types gives SB010.
 func TestInjectionComparator(t *testing.T) {
+	t.Parallel()
 	src := filepath.Join(repoRoot(t), "examples", "xdpcount", "xdpcount.rb")
 	text, _ := os.ReadFile(src)
 	res, err := analyze(testSpinel(t), t.TempDir(), src, string(text), analyzeOpts{mutateTyping: func(ty *Types) {
@@ -202,6 +208,7 @@ func TestInjectionComparator(t *testing.T) {
 // TestDynamicDispatch tests SB004 (not reachable from source in the first accepted subset — receivers are limited to map constants
 // and Spinel dispatches them directly): changing a codegen record to a switch stops it.
 func TestDynamicDispatch(t *testing.T) {
+	t.Parallel()
 	src := filepath.Join(repoRoot(t), "examples", "xdpcount", "xdpcount.rb")
 	text, _ := os.ReadFile(src)
 	res, err := analyze(testSpinel(t), t.TempDir(), src, string(text), analyzeOpts{mutateTyping: func(ty *Types) {
@@ -221,6 +228,7 @@ func TestDynamicDispatch(t *testing.T) {
 
 // TestAmbiguousType tests SB015: giving one node records of two types (specialisation) stops it.
 func TestAmbiguousType(t *testing.T) {
+	t.Parallel()
 	src := filepath.Join(repoRoot(t), "examples", "xdpcount", "xdpcount.rb")
 	text, _ := os.ReadFile(src)
 	res, err := analyze(testSpinel(t), t.TempDir(), src, string(text), analyzeOpts{mutateTyping: func(ty *Types) {
@@ -252,6 +260,7 @@ func hasCode(ds Diags, c Code, at string) bool {
 // TestVerifyWorld checks that the allowed op set is a subset of bpf-mlir's stage 1, that the generated ops are in the allowed set,
 // and that an op outside the set stops.
 func TestVerifyWorld(t *testing.T) {
+	t.Parallel()
 	ref, err := ReferenceOps(filepath.Join(repoRoot(t), "third_party", "bpf-mlir", "docs", "reference", "ebpf_ops.md"))
 	if err != nil {
 		t.Fatal(err)
@@ -278,6 +287,7 @@ func TestVerifyWorld(t *testing.T) {
 // same example (testdata/mojo_xdpcount.mlir — a copy of mojo-bpf-mlir's examples/xdpcount/xdpcount.mlir), ignoring locations,
 // SSA names and program names.
 func TestSameOpsAsMojo(t *testing.T) {
+	t.Parallel()
 	norm := func(s string) string {
 		s = regexp.MustCompile(` loc\([^)]*\)`).ReplaceAllString(s, "")
 		s = regexp.MustCompile(`%[a-z]+\d*`).ReplaceAllString(s, "%_")
@@ -303,6 +313,7 @@ func TestSameOpsAsMojo(t *testing.T) {
 
 // TestCodesNamed checks that every reason code has a name.
 func TestCodesNamed(t *testing.T) {
+	t.Parallel()
 	var codes []string
 	for c := range codeNames {
 		codes = append(codes, string(c))
@@ -319,6 +330,7 @@ func TestCodesNamed(t *testing.T) {
 // allows), and checks that with the rule there are 0, and that the rule is not too wide (a difference in a node that contains no
 // ctx read is still SB010).
 func TestComparatorDependentRule(t *testing.T) {
+	t.Parallel()
 	sp := testSpinel(t)
 	src := filepath.Join("testdata", "neg", "ctx_use.rb")
 	text, err := os.ReadFile(src)
@@ -380,6 +392,7 @@ func TestComparatorDependentRule(t *testing.T) {
 // TestUnusedMapConditional tests a rule added after a first run: a map that is declared but never used is a Conditional SB013 and
 // does not appear in the schema or maps.json.
 func TestUnusedMapConditional(t *testing.T) {
+	t.Parallel()
 	out, err := Generate(testSpinel(t), t.TempDir(), filepath.Join("testdata", "pos", "unused_map.rb"))
 	if err != nil {
 		t.Fatal(err)
@@ -397,6 +410,7 @@ func TestUnusedMapConditional(t *testing.T) {
 // type of a node in the flow that also has a type on the side without injection (the IfNode of `if w` — Integer) stops with SB010.
 // Without the rule, the differences of the flow's nodes are listed as mismatches.
 func TestComparatorAdditiveRule(t *testing.T) {
+	t.Parallel()
 	sp := testSpinel(t)
 	src := filepath.Join("testdata", "pos", "pkt_ether.rb")
 	text, err := os.ReadFile(src)
@@ -442,6 +456,7 @@ func TestComparatorAdditiveRule(t *testing.T) {
 
 // TestNoUncheckedPacketLoad checks that an unchecked ebpf.packet.load is not an allowed op (it reads an implicit 0 out of range).
 func TestNoUncheckedPacketLoad(t *testing.T) {
+	t.Parallel()
 	for _, op := range AllowedOps() {
 		if op == "ebpf.packet.load" || op == "ebpf.packet.store" {
 			t.Fatalf("%s is in the allowed ops", op)
@@ -454,6 +469,7 @@ func TestNoUncheckedPacketLoad(t *testing.T) {
 
 // TestPacketReproducible checks that the .mlir and schema of the packet positive examples are byte-identical across two generations.
 func TestPacketReproducible(t *testing.T) {
+	t.Parallel()
 	sp := testSpinel(t)
 	files, _ := filepath.Glob(filepath.Join("testdata", "pos", "pkt_*.rb"))
 	if len(files) < 4 {
@@ -480,6 +496,7 @@ func TestPacketReproducible(t *testing.T) {
 // If a Spinel upgrade changes the spelling, this test fails by name (before the allowance silently disappears, or another spelling
 // is compared as a type).
 func TestUntypedSpellingCanary(t *testing.T) {
+	t.Parallel()
 	sp := testSpinel(t)
 	src := filepath.Join("testdata", "pos", "pkt_ether.rb")
 	text, err := os.ReadFile(src)
@@ -521,6 +538,7 @@ func TestUntypedSpellingCanary(t *testing.T) {
 // (The first version used rec_basic — a program that does not read ctx has 0 mismatches with or without injection (injection does not
 // change the types along a record's flow) — and was kept as TestRecordComparatorNoCtx.)
 func TestRecordComparator(t *testing.T) {
+	t.Parallel()
 	sp := testSpinel(t)
 	src := filepath.Join("testdata", "pos", "rec_pkt.rb")
 	text, err := os.ReadFile(src)
@@ -570,6 +588,7 @@ func TestRecordComparator(t *testing.T) {
 // TestRecordReproducible checks that the .mlir, schema and maps.json of the record positive examples are byte-identical across two
 // generations, and that the schema has records and record_ref.
 func TestRecordReproducible(t *testing.T) {
+	t.Parallel()
 	sp := testSpinel(t)
 	files, _ := filepath.Glob(filepath.Join("testdata", "pos", "rec_*.rb"))
 	if len(files) == 0 {
@@ -599,6 +618,7 @@ func TestRecordReproducible(t *testing.T) {
 // TestRecordComparatorNoCtx keeps a first-run observation: a record program that does not read ctx (rec_basic) has 0 comparator
 // mismatches with or without injection — injection does not change the types along a record's flow.
 func TestRecordComparatorNoCtx(t *testing.T) {
+	t.Parallel()
 	sp := testSpinel(t)
 	src := filepath.Join("testdata", "pos", "rec_basic.rb")
 	text, _ := os.ReadFile(src)
@@ -627,6 +647,7 @@ func TestRecordComparatorNoCtx(t *testing.T) {
 // inference (earlier, such forms made Spinel emit invalid C: a splat `class.new(*vals)` on a receiver of undetermined type, and
 // member calls for types that never arrive through a polymorphic argument).
 func TestLibraryKeepsEBPFTypes(t *testing.T) {
+	t.Parallel()
 	sp := testSpinel(t)
 	cases := []struct {
 		name, user string

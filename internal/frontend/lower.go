@@ -28,6 +28,14 @@ func Lower(res *Result) (string, error) {
 		}
 	}
 	text := b.String()
+	if usesScx(res.Programs) { // the sched_ext op forms (bpf-mlir's insert set) — the module attribute wraps every op after the two comment lines
+		if i := strings.Index(text, "\n"); i >= 0 {
+			if j := strings.Index(text[i+1:], "\n"); j >= 0 {
+				k := i + 1 + j + 1
+				text = text[:k] + "module attributes {ebpf.scx_kfuncs = \"insert\"} {\n" + text[k:] + "}\n"
+			}
+		}
+	}
 	if err := VerifyWorld(text); err != nil {
 		return "", err
 	}
@@ -122,6 +130,17 @@ func lowerProgram(b *strings.Builder, p *Program) error {
 	if err := l.stmts(p.Body); err != nil {
 		return err
 	}
+	if p.SOVal != nil { // a struct_ops integer member's return value (u32 — ebpf.return … : i32)
+		x, err := l.expr(p.SOVal)
+		if err != nil {
+			return err
+		}
+		r := l.val()
+		l.emit("%s = arith.trunci %s : i64 to i32 %s", r, x.name, loc(p.VerdictPos))
+		fmt.Fprintf(b, "  ebpf.return %s : i32 %s\n", r, loc(p.VerdictPos))
+		fmt.Fprintf(b, "} %s\n", loc(p.Pos))
+		return nil
+	}
 	if fmodUses(p) { // fmod_ret replaces the return value — ebpf.return … : i32 (a select when there is a guard)
 		if err := l.lowerFmodReturn(p); err != nil {
 			return err
@@ -196,6 +215,14 @@ func (l *lowerer) expr(e *Expr) (ssaVal, error) {
 	case "ktime":
 		v := l.val()
 		l.emit("%s = ebpf.ktime.ns : i64 %s", v, loc(e.Pos))
+		return ssaVal{v, "i64"}, nil
+	case "scx": // dsq_move_to_local / create_dsq as values
+		return l.scxExpr(e)
+	case "u64op":
+		return l.u64Expr(e)
+	case "scxconst": // an SCX constant (its i64 bit pattern, resolved at load)
+		v := l.val()
+		l.emit("%s = ebpf.scx.const %q : i64 %s", v, e.Path, loc(e.Pos))
 		return ssaVal{v, "i64"}, nil
 	case "gload": // a volatile read of a .rodata / .bss global
 		v := l.val()
@@ -360,7 +387,7 @@ func (l *lowerer) expr(e *Expr) (ssaVal, error) {
 		v := l.val()
 		if e.Kind == "retval" {
 			l.emit("%s = ebpf.ctx.retval %%ctx after %d : !ebpf.ctx<\"fexit\"> -> i%d %s", v, e.Idx, e.Field.Bits, loc(e.Pos))
-		} else if l.kind == "tp_btf" || l.kind == "fentry" || l.kind == "fmod_ret" { // an integer argument of tp_btf (u64 slot i of the context — and of fentry and fmod_ret too)
+		} else if l.kind == "tp_btf" || l.kind == "fentry" || l.kind == "fmod_ret" || l.kind == "struct_ops" { // an integer argument of tp_btf (u64 slot i of the context — and of fentry and fmod_ret too)
 			i := e.Idx
 			if l.kind == "fentry" && mutation("fentry-arg-swap") && (i == 0 || i == 5) { // mutation: swap slots 0 and 5
 				i = 5 - i
@@ -982,6 +1009,38 @@ func (l *lowerer) stmts(ss []Stmt) error {
 				l.emit("%s = ebpf.ctx.arg %%ctx[%d] : !ebpf.ctx<\"tp_btf\"> -> !ebpf.kptr<%q> %s", v, s.Len, s.KT.Name, loc(s.Pos))
 			}
 			l.env[s.Var] = ssaVal{v, "kptr"}
+		case "scx": // a sched_ext op as a statement
+			if err := l.scxStmt(s); err != nil {
+				return err
+			}
+		case "scxsel":
+			if err := l.scxSelect(s); err != nil {
+				return err
+			}
+		case "scxexit":
+			l.scxExit(s)
+		case "gset": // a Global's write (ebpf.global.store — one trunci below 64 bits)
+			x, err := l.expr(s.Val)
+			if err != nil {
+				return err
+			}
+			d := x.name
+			if s.Glob.Bits < 64 {
+				d = l.val()
+				l.emit("%s = arith.trunci %s : i64 to i%d %s", d, x.name, s.Glob.Bits, loc(s.Pos))
+			}
+			l.emit("ebpf.global.store @%s, %s : i%d %s", s.Glob.Name, d, s.Glob.Bits, loc(s.Pos))
+		case "kstore": // the socket-write rule: write an integer field of the checked socket (ebpf.kfield.store) — the value is narrowed at the store
+			x, err := l.expr(s.Val)
+			if err != nil {
+				return err
+			}
+			v := x.name
+			if s.Field.Bits < 64 {
+				v = l.val()
+				l.emit("%s = arith.trunci %s : i64 to i%d %s", v, x.name, s.Field.Bits, loc(s.Pos))
+			}
+			l.emit("ebpf.kfield.store %s %q, %s : !ebpf.kptr<%q>, i%d %s", l.env[s.Var].name, s.Field.Name, v, s.KT.Name, s.Field.Bits, loc(s.Pos))
 		case "kcheck": // a nullable kernel pointer (ctx.kptr_or_null / t.ptr) and its if → ebpf.kptr.check
 			r := l.val()
 			if s.PtrOf == "" {

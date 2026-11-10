@@ -400,7 +400,10 @@ sr_result sr_analyze(const sr_spinel *s, const char *dir, const char *base, sr_s
 	if (e.kind)
 		return e;
 	sr_types *t;
-	e = sr_parse_types(sr_bufstr(&data), &t);
+	/* The types are bound to this invocation's AST, after both are decoded and before any index or span use */
+	sr_type_rec *sel;
+	size_t n_sel;
+	e = sr_parse_types_ast(sr_bufstr(&data), ast, &t, &sel, &n_sel);
 	if (e.kind)
 		return e;
 	size_t nd = 0;

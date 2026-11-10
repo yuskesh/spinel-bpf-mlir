@@ -17,9 +17,9 @@ static int one_ = 1;
 /* libCallees (analyze.go), sorted bytewise */
 static const char *const lib_callees[] = {
     "ArrayMap#atomic_add", "ArrayMap#lookup", "ArrayMap#update", "CgroupSkb#check", "CgroupSkb#len", "Config#value", "Counter#add",
-    "Counter#value", "DevMap#redirect", "FentryCtx#arg", "FentryCtx#kptr_or_null", "FexitCtx#ret", "FlowCtx#check", "FlowCtx#key",
-    "FlowCtx#set_key", "FmodRetCtx#arg", "HashMap#add_or_init", "HashMap#delete", "HashMap#insert", "HashMap#lookup",
-    "HashMap#replace", "HashMap#update", "KPtr#addr", "KPtr#copy", "KPtr#load", "KPtr#ptr", "KPtr#str", "KprobeCtx#arg",
+    "Counter#value", "DevMap#redirect", "ExitInfo#value", "FentryCtx#arg", "FentryCtx#kptr_or_null", "FexitCtx#ret", "FlowCtx#check", "FlowCtx#key",
+    "FlowCtx#set_key", "FmodRetCtx#arg", "Global#set", "Global#store", "Global#value", "HashMap#add_or_init", "HashMap#delete", "HashMap#insert", "HashMap#lookup",
+    "HashMap#replace", "HashMap#update", "KPtr#addr", "KPtr#copy", "KPtr#load", "KPtr#ptr", "KPtr#set_field", "KPtr#str", "KprobeCtx#arg",
     "KprobeCtx#read", "KretprobeCtx#ret", "KsyscallCtx#arg", "KsyscallCtx#argv_arg", "KsyscallCtx#str_arg", "LpmTrieMap#lookup",
     "LruHashMap#add_or_init", "LruHashMap#delete", "LruHashMap#insert", "LruHashMap#lookup", "LruHashMap#replace",
     "LruHashMap#update", "LruRecordHashMap#delete", "LruRecordHashMap#insert", "LruRecordHashMap#lookup",
@@ -31,13 +31,14 @@ static const char *const lib_callees[] = {
     "PerCpuRecordMap#update", "RawTpCtx#arg", "RecordHashMap#delete", "RecordHashMap#insert", "RecordHashMap#lookup",
     "RecordHashMap#replace", "RecordHashMap#update", "RecordMap#lookup", "RecordMap#update", "RecordRef#atomic_add",
     "RecordRef#load", "RingBuf#output", "RingBuf#output_argv", "RingBuf#output_buf", "RingBuf#output_comm", "RingBuf#output_str",
-    "RingBuf#output_str_or_discard", "SkBuff#len", "SkBuff#mark", "SkBuff#mark=", "SkLookupCtx#local_port", "SockMap#assign",
-    "SocketFilterCtx#len", "TpBtfCtx#arg", "TpBtfCtx#kptr", "TpBtfCtx#kptr_or_null", "TracepointCtx#argv_field",
+    "RingBuf#output_str_or_discard", "Scx.create_dsq", "Scx.dsq_insert", "Scx.dsq_insert_vtime", "Scx.dsq_move_to_local",
+    "Scx.error", "Scx.exit_info", "Scx.select_cpu_dfl", "Scx.task_set_dsq_vtime", "SkBuff#len", "SkBuff#mark", "SkBuff#mark=", "SkLookupCtx#local_port", "SockMap#assign",
+    "SocketFilterCtx#len", "StructOpsCtx#arg", "StructOpsCtx#kptr", "StructOpsCtx#kptr_or_null", "TpBtfCtx#arg", "TpBtfCtx#kptr", "TpBtfCtx#kptr_or_null", "TracepointCtx#argv_field",
     "TracepointCtx#copy", "TracepointCtx#field", "TracepointCtx#str_field", "UprobeCtx#arg", "UprobeCtx#buf_arg",
     "UprobeCtx#str_arg", "UretprobeCtx#ret", "XdpMd#adjust_head", "XdpMd#adjust_tail", "XdpMd#ingress_ifindex", NULL};
 
 /* ebpfOnlyHelpers (analyze.go) */
-static const char *const ebpf_only_helpers[] = {"BPF.pid_tgid", "BPF.ktime_ns", "BPF.fmod_return", "XdpMd#check", "SkBuff#check",
+static const char *const ebpf_only_helpers[] = {"BPF.pid_tgid", "BPF.ktime_ns", "BPF.u64_add", "BPF.u64_sub", "BPF.u64_mul", "BPF.u64_div", "BPF.time_before", "BPF.fmod_return", "XdpMd#check", "SkBuff#check",
 						"Window#u8",	"Window#be16",	"Window#be32",	   "Window#le16", "Window#le32",
 						NULL};
 
@@ -161,7 +162,7 @@ fe_ival fe_width_range(int64_t bits, int is_signed)
 /* usesKernelTypes (kernel.go) */
 int fe_uses_kernel_types(const fe_program *p)
 {
-	return p && (fe_streq(p->kind, "tp_btf") || (fe_streq(p->kind, "fentry") && p->n_t_args > 0));
+	return p && (fe_streq(p->kind, "tp_btf") || ((fe_streq(p->kind, "fentry") || fe_streq(p->kind, "struct_ops")) && p->n_t_args > 0));
 }
 
 /* ---- checkLibDefs (analyze.go) ---- */
@@ -757,6 +758,9 @@ void fe_steps_4_to_7(fe_analysis *an, fe_result *res)
 			res->programs_nil = 0;
 		}
 	}
+	res->struct_ops = t->struct_ops; /* Go: res.StructOps = z.structOps */
+	res->n_struct_ops = t->n_struct_ops;
+	res->struct_ops_nil = t->n_struct_ops == 0;
 	for (size_t i = 0; i < n_order; i++) {
 		fe_func_info *fi = order[i];
 		if (fi->bad || !fi->called)

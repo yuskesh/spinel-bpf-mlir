@@ -285,6 +285,10 @@ static void root_decl(dumper *d, const fe_root_decl *r)
 	SLICE(d, r->targs, r->n_targs, r->targs_nil, tp_arg);
 	s(d, " TFields=");
 	SLICE(d, r->tfields, r->n_tfields, r->tfields_nil, tp_field);
+	s(d, " SOType=");
+	q(d, r->so_type);
+	s(d, " SOMember=");
+	q(d, r->so_member);
 	s(d, "}");
 }
 

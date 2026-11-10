@@ -1,0 +1,213 @@
+{
+  "version": 1,
+  "coverage": {
+    "programs": "complete",
+    "maps": "complete",
+    "records": "complete",
+    "telemetry": "complete"
+  },
+  "core": {
+    "kernel_types": [
+      {
+        "name": "tcp_sock",
+        "note": "Ruby Struct TcpSock",
+        "fields": [
+          {
+            "name": "snd_cwnd",
+            "type": {
+              "kind": "int",
+              "bits": 32,
+              "signed": false,
+              "endianness": "little",
+              "alignment": 4
+            }
+          },
+          {
+            "name": "snd_ssthresh",
+            "type": {
+              "kind": "int",
+              "bits": 32,
+              "signed": false,
+              "endianness": "little",
+              "alignment": 4
+            }
+          },
+          {
+            "name": "snd_cwnd_cnt",
+            "type": {
+              "kind": "int",
+              "bits": 32,
+              "signed": false,
+              "endianness": "little",
+              "alignment": 4
+            }
+          },
+          {
+            "name": "snd_cwnd_clamp",
+            "type": {
+              "kind": "int",
+              "bits": 32,
+              "signed": false,
+              "endianness": "little",
+              "alignment": 4
+            }
+          },
+          {
+            "name": "prior_cwnd",
+            "type": {
+              "kind": "int",
+              "bits": 32,
+              "signed": false,
+              "endianness": "little",
+              "alignment": 4
+            }
+          }
+        ]
+      }
+    ],
+    "records": [],
+    "maps": [
+      {
+        "symbol": "Out",
+        "kind": "array",
+        "key": {
+          "kind": "int",
+          "bits": 32,
+          "signed": false,
+          "endianness": "little",
+          "alignment": 4
+        },
+        "value": {
+          "kind": "int",
+          "bits": 32,
+          "signed": false,
+          "endianness": "little",
+          "alignment": 4
+        },
+        "max_entries": 4,
+        "flags": 0,
+        "record": "",
+        "note": "Ruby constant Out"
+      },
+      {
+        "symbol": "RenoOps",
+        "kind": "struct_ops",
+        "key": {
+          "kind": "int",
+          "bits": 32,
+          "signed": false,
+          "endianness": "little",
+          "alignment": 4
+        },
+        "max_entries": 1,
+        "flags": 0,
+        "record": "",
+        "struct_ops": {
+          "type": "tcp_congestion_ops",
+          "name": "rbreno",
+          "ops": [
+            {
+              "member": "init",
+              "program": "reno_init"
+            },
+            {
+              "member": "ssthresh",
+              "program": "reno_ssthresh"
+            },
+            {
+              "member": "cong_avoid",
+              "program": "reno_cong_avoid"
+            },
+            {
+              "member": "undo_cwnd",
+              "program": "reno_undo_cwnd"
+            }
+          ]
+        },
+        "note": "Ruby BPF.struct_ops :RenoOps"
+      }
+    ],
+    "programs": [
+      {
+        "name": "reno_init",
+        "kind": "struct_ops",
+        "attach_target": "RenoOps",
+        "nargs": 1,
+        "ret": "void",
+        "maps": [
+          "Out"
+        ],
+        "note": "Ruby def reno_init"
+      },
+      {
+        "name": "reno_ssthresh",
+        "kind": "struct_ops",
+        "attach_target": "RenoOps",
+        "nargs": 1,
+        "ret": {
+          "kind": "int",
+          "bits": 32,
+          "signed": false,
+          "endianness": "little",
+          "alignment": 4
+        },
+        "maps": [
+          "Out"
+        ],
+        "args": [
+          "tcp_sock"
+        ],
+        "note": "Ruby def reno_ssthresh"
+      },
+      {
+        "name": "reno_cong_avoid",
+        "kind": "struct_ops",
+        "attach_target": "RenoOps",
+        "nargs": 3,
+        "ret": "void",
+        "maps": [
+          "Out"
+        ],
+        "args": [
+          "tcp_sock",
+          null,
+          {
+            "kind": "int",
+            "bits": 32,
+            "signed": false,
+            "endianness": "little",
+            "alignment": 4
+          }
+        ],
+        "note": "Ruby def reno_cong_avoid"
+      },
+      {
+        "name": "reno_undo_cwnd",
+        "kind": "struct_ops",
+        "attach_target": "RenoOps",
+        "nargs": 1,
+        "ret": {
+          "kind": "int",
+          "bits": 32,
+          "signed": false,
+          "endianness": "little",
+          "alignment": 4
+        },
+        "maps": [
+          "Out"
+        ],
+        "args": [
+          "tcp_sock"
+        ],
+        "note": "Ruby def reno_undo_cwnd"
+      }
+    ]
+  },
+  "telemetry": {
+    "clocks": [],
+    "value_maps": [],
+    "bounds_sets": [],
+    "signals": []
+  },
+  "extensions": {}
+}

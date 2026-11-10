@@ -16,7 +16,7 @@ static void result_init(fe_result *res, sr_str base)
 {
 	memset(res, 0, sizeof *res);
 	res->source = base;
-	res->programs_nil = res->maps_nil = res->rings_nil = res->globals_nil = res->kernel_types_nil = res->funcs_nil = 1;
+	res->programs_nil = res->maps_nil = res->rings_nil = res->globals_nil = res->kernel_types_nil = res->funcs_nil = res->struct_ops_nil = 1;
 	res->membership_nil = res->edges_nil = 1;
 }
 

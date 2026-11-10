@@ -77,6 +77,7 @@ type Stmt struct {
 	Buf     bool            // ostr: R.output_buf — reads uprobe's :user_buf argument Len with ebpf.user.read
 	BufLen  *Expr           // ostr (Buf): the integer expression for the length to read (user.read clamps it as signed)
 	CountF  *RecordField    // ostr (Buf): the :i32 member that receives the clamped length
+	ScxArgs []*Expr         // scx / scxsel: the Integer operands of a sched_ext op
 }
 
 var binOps = map[string]bool{"+": true, "-": true, "*": true, "&": true, "|": true, "^": true, "<<": true, ">>": true, "/": true, "%": true}
@@ -97,9 +98,10 @@ type varInfo struct {
 	Bool bool
 	Iv   Ival
 	From map[string]bool // names of the lookup locals the value came from (for SB019, a read-modify-write through a local). Immutable — a join makes a new set
-	// Wide is a u64 ctx.read value (bound once; used only as `& M`, `>> K`, or copied to a u64 map value or record member).
-	// Mixed is a name that is such a value on one path and an Integer on another; every read of it is refused.
-	Wide, Mixed bool
+	// Wide is a u64 value (rebound only to a u64 value; used as `& M`, `>> K`, a u64 operand, or copied to a u64 map value or
+	// record member). Kread marks a Wide value that came from ctx.read on every path (its diagnostics keep the ctx.read text).
+	// Mixed is a name that is a u64 value on one path and an Integer on another; every read of it is refused.
+	Wide, Mixed, Kread bool
 }
 
 type progCtx struct {
@@ -123,6 +125,7 @@ type progCtx struct {
 	ringMake       bool                       // inside the record.make of a ring's output (an array member accepts t.copy)
 	ostrLive       map[string]bool            // output_str results inside then (r.status may be read)
 	kptrs          map[string]*KernelTypeDecl // kernel pointer locals (read only through `t.load.m`)
+	soSock         map[string]bool            // the socket-argument rule: kernel pointer locals that are a struct_ops member's checked socket argument (writable by the socket-write rule)
 	kchecked       map[string]bool            // locals holding a kptr_or_null / ptr result (a kernel pointer only inside the then of `if q`)
 	fpath          []string                   // the subprogram's diagnostic path (the first path that reached it)
 	ctxKind        string                     // the context kind the subprogram received (xdp / sched_cls)
@@ -175,8 +178,8 @@ func (c *progCtx) typed(x *Node) bool {
 
 func (z *analyzer) program(a *AST, d *Node, r rootDecl) *Program {
 	c := &progCtx{z: z, a: a, t: z.typing.Types, def: d, name: r.Name, refs: map[string]*Node{}, statusReported: map[string]bool{}, refMap: map[string]*MapDecl{}, refKey: map[string]*Expr{}, wins: map[string]*winInfo{},
-		used: map[*MapDecl]bool{}, usedGlobals: map[*GlobalDecl]bool{}, usedRings: map[*RingDecl]bool{}, badBind: map[string]bool{}, ostrs: map[string]bool{}, ostrLive: map[string]bool{}, kptrs: map[string]*KernelTypeDecl{}, kchecked: map[string]bool{}, poisoned: map[string]bool{}, skipIfs: map[int]bool{}, env: map[string]*varInfo{}, blockLocals: map[string]bool{}}
-	c.prog = &Program{Name: r.Name, Kind: r.Kind, Pos: z.pos(a, d), DeclPos: r.Pos, EndLine: d.EndLine, Target: r.Target, Nargs: r.Nargs, Ret: r.Ret, Params: r.Params, BinarySHA: r.BinarySHA, BinaryPath: r.BinaryPath, SysTarget: r.SysTarget, TArgs: r.TArgs, TFields: r.TFields}
+		used: map[*MapDecl]bool{}, usedGlobals: map[*GlobalDecl]bool{}, usedRings: map[*RingDecl]bool{}, badBind: map[string]bool{}, ostrs: map[string]bool{}, ostrLive: map[string]bool{}, kptrs: map[string]*KernelTypeDecl{}, soSock: map[string]bool{}, kchecked: map[string]bool{}, poisoned: map[string]bool{}, skipIfs: map[int]bool{}, env: map[string]*varInfo{}, blockLocals: map[string]bool{}}
+	c.prog = &Program{Name: r.Name, Kind: r.Kind, Pos: z.pos(a, d), DeclPos: r.Pos, EndLine: d.EndLine, Target: r.Target, Nargs: r.Nargs, Ret: r.Ret, Params: r.Params, BinarySHA: r.BinarySHA, BinaryPath: r.BinaryPath, SysTarget: r.SysTarget, TArgs: r.TArgs, TFields: r.TFields, SOType: r.SOType, SOMember: r.SOMember}
 	before := len(z.diags)
 
 	// The type of the root's parameter is the kind's context class from bpf.rb (XdpMd, FentryCtx, FexitCtx, KprobeCtx, SkBuff)
@@ -237,8 +240,54 @@ func (z *analyzer) program(a *AST, d *Node, r rootDecl) *Program {
 	if bad {
 		return nil
 	}
-	if verdictsOf(r.Kind) == nil {
-		// tracing: the last value is dropped and the program ends with `ebpf.verdict "done"`
+	if r.Kind == "struct_ops" && r.Ret != "void" { // an integer member: the last expression is the return value
+		if len(stmts) == 0 {
+			c.add(Rejected, SB008ProgramShape, d, "the %s member `%s` returns %s — its callback must end with an Integer expression", r.SOType, r.SOMember, r.Ret)
+			return nil
+		}
+		// a `return` anywhere in the def stops, as for the no-verdict kinds: c.stmts skips ReturnNodes, so it would be
+		// dropped silently (the member returns its last expression)
+		rets := 0
+		walk(a, d, func(x *Node) bool {
+			if x.Type == "ReturnNode" {
+				c.add(Rejected, SB008ProgramShape, x, "the %s member `%s` returns its last expression — `return` is not accepted here (an early exit would still run the statements after it)", r.SOType, r.SOMember)
+				rets++
+			}
+			return true
+		})
+		if rets > 0 {
+			return nil
+		}
+		last := stmts[len(stmts)-1]
+		c.prog.Body = c.stmts(stmts[:len(stmts)-1], "")
+		e := c.expr(last, "")
+		if e == nil {
+			return nil
+		}
+		if e.Bool || e.Wide {
+			c.add(Rejected, SB014SemanticGap, last, "the %s member `%s` returns %s — its last expression must be an Integer that fits it", r.SOType, r.SOMember, r.Ret)
+			return nil
+		}
+		if w := widthRange(recordTypes[r.Ret][0], recordTypes[r.Ret][1] == 1); e.Iv.Lo.Cmp(w.Lo) < 0 || e.Iv.Hi.Cmp(w.Hi) > 0 {
+			c.add(Rejected, SB014SemanticGap, last, "the return value of the %s member `%s` may not fit %s (its range is %s, %s is %s) — narrow it first", r.SOType, r.SOMember, r.Ret, e.Iv, r.Ret, w)
+			return nil
+		}
+		c.prog.SOVal, c.prog.Verdict, c.prog.VerdictPos = e, "done", c.z.pos(a, last)
+	} else if verdictsOf(r.Kind) == nil {
+		// tracing: the last value is dropped and the program ends with `ebpf.verdict "done"`. A `return` anywhere in the program's def
+		// stops: c.stmts skips ReturnNodes, and no verdict check runs for these kinds, so it was dropped silently — a value
+		// would be lost and an early exit would run the statements after it. The walk covers only this def (its body, arms and blocks).
+		rets := 0
+		walk(a, d, func(x *Node) bool {
+			if x.Type == "ReturnNode" {
+				c.add(Rejected, SB008ProgramShape, x, "a %s program returns nothing — `return` is not accepted here (a value would be dropped, and an early exit would still run the statements after it)", r.Kind)
+				rets++
+			}
+			return true
+		})
+		if rets > 0 {
+			return nil
+		}
 		c.prog.Body = c.stmts(stmts, "")
 		c.prog.Verdict = "done"
 		c.prog.VerdictPos = c.z.pos(a, d)
@@ -316,8 +365,9 @@ func joinEnv(a, b map[string]*varInfo) map[string]*varInfo {
 			v.Iv = union(va.Iv, vb.Iv)
 		}
 		v.From = unionRefs(va.From, vb.From)
-		if va.Mixed || vb.Mixed || va.Wide != vb.Wide { // never merge a u64 ctx.read value with an Integer
-			v.Wide, v.Mixed = false, true
+		v.Kread = va.Kread && vb.Kread
+		if va.Mixed || vb.Mixed || va.Wide != vb.Wide { // never merge a u64 value with an Integer
+			v.Wide, v.Mixed, v.Kread = false, true, va.Kread || vb.Kread
 		}
 		out[k] = &v
 	}
@@ -340,6 +390,18 @@ func (c *progCtx) stmts(ns []*Node, refVar string) []Stmt {
 		n := ns[i]
 		switch n.Type {
 		case "CallNode":
+			if s, ok, handled := c.scxStmt(n, refVar); handled { // a sched_ext op as a statement
+				if ok {
+					out = append(out, s)
+				}
+				continue
+			}
+			if s, ok, handled := c.kstoreCall(n); handled { // the socket-write rule: `q.set_field(:m, v)` (and the old name `q.store` refused)
+				if ok {
+					out = append(out, s)
+				}
+				continue
+			}
 			if fi := c.z.userCall(c.a, n); fi != nil { // the statement `f(x)` — its value is dropped
 				if e := c.subCall(n, fi, refVar); e != nil {
 					out = append(out, Stmt{Kind: "drop", Val: e, Pos: c.z.pos(c.a, n)})
@@ -475,6 +537,18 @@ func (c *progCtx) stmts(ns []*Node, refVar string) []Stmt {
 				}
 				continue
 			}
+			if c.isScxCall(v) && v.Str["name"] == "create_dsq" { // the status of create_dsq, as a hash map op's (SB026)
+				if n.Str["name"] == "_" {
+					if e := c.expr(v, refVar); e != nil {
+						out = append(out, Stmt{Kind: "drop", Val: e, Pos: c.z.pos(c.a, n)})
+					}
+					continue
+				}
+				if !c.statusLocalOK(n, scxStatusDecl, "create_dsq") {
+					c.poisoned[n.Str["name"]] = true
+					continue
+				}
+			}
 			if m, bad, ok := c.statusCall(v); ok {
 				if bad || c.readsBad(v) {
 					c.poisoned[n.Str["name"]] = true
@@ -526,7 +600,17 @@ func (c *progCtx) stmts(ns []*Node, refVar string) []Stmt {
 			if s, ok := c.assign(n, n.Str["name"], v, refVar); ok {
 				out = append(out, s)
 			}
-		case "MultiWriteNode": // only `v, st = ctx.read(n, offset, :type)`
+		case "MultiWriteNode": // only `v, st = ctx.read(n, offset, :type)`, and in struct_ops `cpu, idle = BPF::Scx.select_cpu_dfl(…)`
+			if c.prog.Kind == "struct_ops" {
+				if s, ok, handled := c.scxSelect(n, refVar); handled {
+					if ok {
+						out = append(out, s)
+					}
+				} else {
+					c.scxMultiRefused(n)
+				}
+				continue
+			}
 			if s, ok := c.kreadStmt(n); ok {
 				out = append(out, s)
 			}
@@ -577,10 +661,6 @@ func (c *progCtx) assign(n *Node, name string, v *Node, refVar string) (Stmt, bo
 		c.add(Rejected, SB007ReservedName, n, "`%s` uses the reserved prefix spinelbpf_", name)
 		return Stmt{}, false
 	}
-	if !c.wideRebindOK(name, n) { // the new varInfo below carries neither Wide nor Mixed, so a Mixed name is rebound as an Integer
-		c.poisoned[name] = true
-		return Stmt{}, false
-	}
 	if v == nil || !c.typed(n) {
 		return Stmt{}, false
 	}
@@ -589,7 +669,12 @@ func (c *progCtx) assign(n *Node, name string, v *Node, refVar string) (Stmt, bo
 		c.poisoned[name] = true
 		return Stmt{}, false
 	}
-	if !c.valueOK(e, v) {
+	if !e.Wide && !c.wideRebindOK(name, n) { // rule A: a Wide name is rebound only to a Wide value (a Mixed name may be rebound to either)
+		c.poisoned[name] = true
+		return Stmt{}, false
+	}
+	if old, ok := c.env[name]; ok && e.Wide && !old.Wide && !old.Mixed && !old.Bool {
+		c.add(Rejected, SB001UnsupportedConstruct, n, "`%s` changes between Integer and a u64 value", name)
 		c.poisoned[name] = true
 		return Stmt{}, false
 	}
@@ -605,7 +690,11 @@ func (c *progCtx) assign(n *Node, name string, v *Node, refVar string) (Stmt, bo
 		c.add(Rejected, SB001UnsupportedConstruct, n, "`%s` changes between Integer and bool", name)
 		return Stmt{}, false
 	}
-	c.env[name] = &varInfo{Bool: e.Bool, Iv: e.Iv, From: c.origin(v)}
+	vi := &varInfo{Bool: e.Bool, Iv: e.Iv, From: c.origin(v), Wide: e.Wide}
+	if e.Wide && e.Kind == "var" {
+		vi.Kread = c.env[e.Var] != nil && c.env[e.Var].Kread
+	}
+	c.env[name] = vi
 	return Stmt{Kind: "assign", Var: name, Val: e, Pos: c.z.pos(c.a, n)}, true
 }
 
@@ -641,26 +730,35 @@ func (c *progCtx) opAssign(n *Node, refVar string) (Stmt, bool) {
 	return Stmt{Kind: "assign", Var: name, Val: e, Pos: c.z.pos(c.a, n)}, true
 }
 
-// wideRebindOK refuses an assignment to a name that holds a u64 ctx.read value (such a name is bound once).
+// wideRebindOK refuses an assignment of a non-u64 value to a name that holds a u64 value (rule A: such a name is rebound only to a
+// u64 value; an operator assignment never gives one).
 func (c *progCtx) wideRebindOK(name string, n *Node) bool {
 	if info, ok := c.env[name]; ok && info.Wide {
-		c.add(Rejected, SB014SemanticGap, n, "`%s` holds a u64 ctx.read value and is bound once — narrow it into a new name (`y = %s & M` or `y = %s >> K`)", name, name, name)
+		c.add(Rejected, SB014SemanticGap, n, "`%s` holds a u64 value and is rebound only to a u64 value — narrow it into a new name (`y = %s & M` or `y = %s >> K`)", name, name, name)
 		return false
 	}
 	return true
 }
 
-// mixedReadOK refuses a read of a name that is a u64 ctx.read value on one path and an Integer on another.
+// mixedReadOK refuses a read of a name that is a u64 value on one path and an Integer on another.
 func (c *progCtx) mixedReadOK(name string, n *Node) bool {
 	if info, ok := c.env[name]; ok && info.Mixed {
+		if !info.Kread {
+			c.add(Rejected, SB014SemanticGap, n, "`%s` is a u64 value on one path and an Integer on another — bind the narrowed value to a new name on every path", name)
+			return false
+		}
 		c.add(Rejected, SB014SemanticGap, n, "`%s` is a u64 ctx.read value on one path and an Integer on another — bind the narrowed value to a new name on every path", name)
 		return false
 	}
 	return true
 }
 
-// valueOK reports whether the expression may be stored in a local as a value (a u64 load is not stored in a local).
+// valueOK reports whether the expression may be used as an Integer (a u64 value may not).
 func (c *progCtx) valueOK(e *Expr, n *Node) bool {
+	if e.Wide && e.Kind == "var" && !c.wideKread(e) { // a u64 local of another source (rule A)
+		c.add(Rejected, SB014SemanticGap, n, "a u64 value %s does not fit Ruby's Integer — narrow it first (`x & M` or `x >> K`), or pass it to a u64 operand, map value or record member", e.Iv)
+		return false
+	}
 	if e.Wide && e.Kind == "var" { // a u64 ctx.read value
 		c.add(Rejected, SB014SemanticGap, n, "a u64 ctx.read value %s does not fit Ruby's Integer — narrow it first (`x & M` or `x >> K`), or pass it straight to a u64 map or record member", e.Iv)
 		return false
@@ -895,6 +993,9 @@ func (c *progCtx) expr(n *Node, refVar string) *Expr {
 	case "CallNode":
 		return c.callExpr(n, refVar)
 	case "ConstantPathNode":
+		if e, ok := c.scxConst(n); ok { // BPF::Scx::DSQ_LOCAL / SLICE_DFL
+			return e
+		}
 		if v, ok := errnoConsts[constName(c.a, n)]; ok { // BPF::ENOENT etc. (a negative errno to compare with a status)
 			if mutation("hash-errno") && v == -2 { // mutation control (test build only): the errno with the wrong sign
 				v = 2
@@ -909,6 +1010,9 @@ func (c *progCtx) expr(n *Node, refVar string) *Expr {
 
 // callExpr translates a CallNode that is an operator, a comparison or `p.load`.
 func (c *progCtx) callExpr(n *Node, refVar string) *Expr {
+	if c.isScxCall(n) { // dsq_move_to_local (a Bool) and create_dsq (a status) as values
+		return c.scxExpr(n, refVar)
+	}
 	name := n.Str["name"]
 	p := c.z.pos(c.a, n)
 	recv := c.a.ref(n, "receiver")
@@ -1051,6 +1155,9 @@ func (c *progCtx) callExpr(n *Node, refVar string) *Expr {
 		// the u64 tgid << 32 | pid — Wide like ktime (only copied to a u64, `& M` or `>> K`)
 		return &Expr{Kind: "pidtgid", Iv: iv(new(big.Int), new(big.Int).Set(u64Max)), Wide: true, Pos: p}
 	}
+	if u64Ops[name] && constName(c.a, recv) == "BPF" {
+		return c.u64Op(n, name, as, refVar, p)
+	}
 	if name == "ktime_ns" && constName(c.a, recv) == "BPF" {
 		callee, ok := c.callee(n)
 		if !ok {
@@ -1181,7 +1288,7 @@ func (c *progCtx) binary(n *Node, op string, l, r *Expr, rn *Node) *Expr {
 				return nil
 			}
 			if m.Sign() < 0 {
-				if l.Kind == "var" { // a u64 ctx.read value
+				if l.Kind == "var" && c.wideKread(l) { // a u64 ctx.read value
 					c.add(Rejected, SB014SemanticGap, rn, "a u64 ctx.read value may be masked only with a non-negative literal")
 					return nil
 				}
@@ -1192,7 +1299,7 @@ func (c *progCtx) binary(n *Node, op string, l, r *Expr, rn *Node) *Expr {
 			return e
 		}
 		if r.Wide {
-			if r.Kind == "var" { // a u64 ctx.read value
+			if r.Kind == "var" && c.wideKread(r) { // a u64 ctx.read value
 				c.add(Rejected, SB014SemanticGap, n, "write the u64 ctx.read value on the left of `&` with a literal mask (`r & M`)")
 				return nil
 			}
@@ -1467,7 +1574,7 @@ func (c *progCtx) value(n *Node, m *MapDecl, refVar string, role string) *Expr {
 		return nil
 	}
 	if e.Wide {
-		if m.ValueBits == 64 && !m.Signed && ((e.Kind == "var" && e.Wide) || e.Kind == "load" || e.Kind == "ktime" || e.Kind == "pidtgid" || e.Kind == "retval" || e.Kind == "kparg" || e.Kind == "rawarg" || e.Kind == "tpfield" || e.Kind == "gload" || e.Kind == "kfload") {
+		if m.ValueBits == 64 && !m.Signed && ((e.Kind == "var" && e.Wide) || e.Kind == "u64op" || e.Kind == "load" || e.Kind == "ktime" || e.Kind == "pidtgid" || e.Kind == "retval" || e.Kind == "kparg" || e.Kind == "rawarg" || e.Kind == "tpfield" || e.Kind == "gload" || e.Kind == "kfload") {
 			return e // a copy of a u64 value (the first example program, a time)
 		}
 		c.valueOK(e, n)
@@ -1596,6 +1703,9 @@ func (c *progCtx) mapCall(n *Node, refVar string) (Stmt, bool) {
 	name := n.Str["name"]
 	if r := c.a.ref(n, "receiver"); r != nil && r.Type == "ConstantReadNode" { // a counter's add
 		if g := c.z.globals[r.Str["name"]]; g != nil {
+			if s, ok, handled := c.globalStmt(n, g, refVar); handled { // a Global's set / an ExitInfo
+				return s, ok
+			}
 			if name == "add" {
 				return c.globalAdd(n, g, args(c.a, n), refVar)
 			}
@@ -2399,6 +2509,27 @@ func (c *progCtx) tracingRead(n *Node, name string, as []*Node, p Pos) *Expr {
 			return mk("kparg", &RecordField{Name: "ptr", Bits: 64, Signed: true}, int64(kp.N))
 		}
 		return mk("kparg", typ(kp.Type), int64(kp.N))
+	case kind == "struct_ops" && (name == "kptr" || name == "kptr_or_null"): // the socket-argument rule: the socket only as `tp = ctx.kptr_or_null(i, T)` + `if tp`
+		c.structOpsKptrRefused(n)
+		return nil
+	case kind == "struct_ops" && name == "arg": // a struct_ops member's integer argument (the member table decides its type)
+		if callee != "StructOpsCtx#arg" {
+			c.add(Rejected, SB011ShadowedName, n, "`%s.arg` resolves to %q, not BPF::StructOpsCtx#arg", c.param, callee)
+			return nil
+		}
+		if len(as) != 1 || as[0].Type != "IntegerNode" {
+			c.add(Rejected, SB033KernelTypeShape, n, "`%s.arg(i)` takes one Integer literal i — an argument index of the member", c.param)
+			return nil
+		}
+		nb, ok := c.z.literal(c.a, as[0])
+		if !ok {
+			return nil
+		}
+		f := c.structOpsArg(n, as[0], nb.Int64())
+		if f == nil {
+			return nil
+		}
+		return mk("kparg", f, nb.Int64())
 	case (kind == "tp_btf" || kind == "fentry" || kind == "fmod_ret") && name == "arg": // an integer argument (also for fentry and fmod_ret)
 		want := map[string]string{"tp_btf": "TpBtfCtx#arg", "fentry": "FentryCtx#arg", "fmod_ret": "FmodRetCtx#arg"}[kind]
 		if callee != want {
@@ -2568,4 +2699,10 @@ func (c *progCtx) adjustPkt(n *Node, refVar string) *Expr {
 		return nil
 	}
 	return &Expr{Kind: "adjh", Args: []*Expr{d}, Iv: iv(big.NewInt(-4095), new(big.Int)), Pos: c.z.pos(c.a, n)}
+}
+
+// wideKread reports whether a Wide local came from ctx.read on every path (its diagnostics keep the ctx.read text).
+func (c *progCtx) wideKread(e *Expr) bool {
+	info := c.env[e.Var]
+	return info != nil && info.Kread
 }

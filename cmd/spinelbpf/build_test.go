@@ -110,7 +110,7 @@ func TestWrongVersionsStopBeforeGenerating(t *testing.T) {
 		{"ebpf-compile dirty", func(c *Config) { // a dirty build of the pinned commit
 			c.EbpfCompile = fakeTool(t, tools, "ec2", "bpf-mlir go/v1.19.0-2100-g2bf112303-dirty (commit "+toolchain.PinnedCompilerCommit+")")
 		}, "modified or unidentified source"},
-		{"spinel other commit", func(c *Config) { c.Spinel = fakeTool(t, tools, "sp1", "spinel 2026.09.30+1 (deadbeef) [gcc]") }, "pinned to 086d514d"},
+		{"spinel other commit", func(c *Config) { c.Spinel = fakeTool(t, tools, "sp1", "spinel 2026.09.30+1 (deadbeef) [gcc]") }, "pinned to 0d58c397"},
 		{"spinel no version line", func(c *Config) { c.Spinel = fakeTool(t, tools, "sp2", "hello") }, "no `spinel <version>"},
 	}
 	for _, tc := range cases {

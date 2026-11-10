@@ -38,6 +38,11 @@ void t_kernel_type_decl(t_ctx *c, const sr_node *n, const t_structs *structs)
 		KBAD(p, "kernel struct %s is declared twice", cn);
 		return;
 	}
+	if (sr_eqc(t_str(as.v[1], "content"), "scx_exit_info")) { /* the frontend owns this row (the four fields ebpf.scx.exit_info reads) */
+		KBAD(t_pos(c, as.v[1]), "the kernel type scx_exit_info is the frontend's (the fields BPF::Scx.exit_info reads) — it is not declared; "
+					"an exit callback writes it with `BPF::Scx.exit_info(ctx, U)`");
+		return;
+	}
 	fe_kernel_type_decl *d = sr_alloc(sizeof *d);
 	*d = (fe_kernel_type_decl){.const_name = cn, .name = t_str(as.v[1], "content"), .fields_nil = 1, .pos = p, .struct_pos = s->pos,
 				   .handle_poss_nil = 1};

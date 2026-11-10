@@ -98,13 +98,14 @@ type schemaProgram struct {
 	// tracing (schema_format.md §programs): fexit's nargs and ret, kprobe's arch and params (the xdp JSON does not change —
 	// these are omitted for it)
 	Nargs        *int            `json:"nargs,omitempty"`
-	Ret          *schemaInt      `json:"ret,omitempty"`
+	Ret          any             `json:"ret,omitempty"`
 	Maps         []string        `json:"maps"`
 	Arch         string          `json:"arch,omitempty"`
 	Params       []schemaParam   `json:"params,omitempty"`
 	BinarySHA256 string          `json:"binary_sha256,omitempty"` // uprobe
 	Args         []any           `json:"args,omitempty"`          // tp_btf (an array by position; an argument the program does not read is null)
 	Fields       []schemaTpField `json:"fields,omitempty"`        // tracepoint (in declaration order)
+	Sleepable    bool            `json:"sleepable,omitempty"`     // struct_ops: a sleepable member program (sched_ext_ops init)
 	Note         string          `json:"note"`
 }
 
@@ -177,7 +178,7 @@ type schemaDoc struct {
 		Records     []any              `json:"records"`
 		Maps        []any              `json:"maps"` // schemaMap or schemaRing
 		Programs    []schemaProgram    `json:"programs"`
-		Globals     []schemaGlobal     `json:"globals,omitempty"` // only when a used global exists (the schema of a program without one is byte-identical to before)
+		Globals     []any              `json:"globals,omitempty"` // only when a used global exists (the schema of a program without one is byte-identical to before)
 	} `json:"core"`
 	Telemetry struct {
 		Clocks     []any `json:"clocks"`
@@ -228,10 +229,17 @@ func Schema(res *Result) ([]byte, error) {
 		}
 		d.Core.Maps = append(d.Core.Maps, schemaMap{Symbol: m.Name, Kind: m.MapKind(), Key: k, Value: v, MaxEntries: m.MaxEntries, Flags: int(m.Flags()), Record: "", Note: "Ruby constant " + m.Const})
 	}
+	for _, so := range res.StructOps {
+		d.Core.Maps = append(d.Core.Maps, structOpsMapSchema(so))
+	}
 	for _, r := range res.Rings {
 		d.Core.Maps = append(d.Core.Maps, schemaRing{Symbol: r.Name, Kind: "ringbuf", MaxEntries: ringSize(r), Record: r.Record.Const, Note: "Ruby constant " + r.Const})
 	}
 	d.Core.KernelTypes = kernelTypesSchema(res) // CO-RE local types
+	if usesExitInfo(res) {                      // the record and the kernel type ebpf.scx.exit_info reads (owned by the frontend)
+		d.Core.Records = append(d.Core.Records, json.RawMessage(userExitInfoRecord))
+		d.Core.KernelTypes = append(d.Core.KernelTypes, scxExitInfoKernelType())
+	}
 	for _, p := range res.Programs {
 		sp := schemaProgram{Name: p.Name, Kind: p.Kind, AttachTarget: p.Target, Maps: []string{}, Note: "Ruby def " + p.Name}
 		switch p.Kind {
@@ -273,6 +281,21 @@ func Schema(res *Result) ([]byte, error) {
 				}
 				sp.Fields = append(sp.Fields, schemaTpField{Name: f.Name, Offset: f.Offset, Type: t})
 			}
+		case "struct_ops": // nargs and ret from the member table; args only for the arguments read (bpf-mlir's shape)
+			n := p.Nargs
+			sp.Nargs = &n
+			if p.Ret == "void" {
+				sp.Ret = "void"
+			} else {
+				r := traceInt(p.Ret)
+				sp.Ret = &r
+			}
+			if as := structOpsArgsSchema(p); as != nil {
+				sp.Args = as
+			}
+			if t := structOpsTypes[p.SOType]; t != nil && t.Sleepable[p.SOMember] {
+				sp.Sleepable = true
+			}
 		case "fentry": // only an fentry with args (without them the output is byte-identical to before)
 			if len(p.TArgs) > 0 {
 				sp.Args = tpArgsSchema(p)
@@ -284,6 +307,10 @@ func Schema(res *Result) ([]byte, error) {
 		d.Core.Programs = append(d.Core.Programs, sp)
 	}
 	for _, g := range res.Globals {
+		if g.Class == "ExitInfo" { // the .data user_exit_info record
+			d.Core.Globals = append(d.Core.Globals, schemaDataGlobal{Name: g.Name, Section: "data", Record: userExitInfoSymbol, Note: "Ruby constant " + g.Const + " (ExitInfo)"})
+			continue
+		}
 		d.Core.Globals = append(d.Core.Globals, schemaGlobal{Name: g.Name, Section: g.Section, Type: schemaInt{"int", g.Bits, g.Signed, "little", g.Bits / 8}, Note: "Ruby constant " + g.Const + " (" + g.Class + ")"})
 	}
 	b, err := json.MarshalIndent(d, "", "  ")
@@ -302,6 +329,21 @@ type mapDeclJSON struct {
 	MaxEntries uint64 `json:"max_entries"`
 	Flags      uint64 `json:"flags,omitempty"` // lpm_trie's BPF_F_NO_PREALLOC (bml, the bpf-mlir loader, checks the declared flags against the ELF's; kinds with
 	// flags 0 do not write the key, so existing documents stay byte-identical)
+	// a struct_ops table's check (bindrt.StructOpsDecl): the type, the kernel name and the member programs, which the
+	// loader compares with the ELF's .struct_ops.link table. Other maps do not write the key.
+	StructOps *structOpsDeclJSON `json:"struct_ops,omitempty"`
+}
+
+// structOpsDeclJSON has the JSON shape of bindrt.StructOpsDecl.
+type structOpsDeclJSON struct {
+	Type string                `json:"type"`
+	Name string                `json:"name,omitempty"`
+	Ops  []structOpsOpDeclJSON `json:"ops"`
+}
+
+type structOpsOpDeclJSON struct {
+	Member  string `json:"member"`
+	Program string `json:"program"`
 }
 
 // MapsJSON returns the map declaration document (the shape of bindrt.MapDecls — §12 of the spec docs/requirements_format.md).
@@ -339,7 +381,17 @@ func MapsJSON(res *Result) ([]byte, error) {
 		}
 		doc.Maps = append(doc.Maps, mapDeclJSON{Name: m.Name, Kind: m.MapKind(), Key: m.KeyTypeName(), Value: m.TypeName(), MaxEntries: m.MaxEntries, Flags: fl})
 	}
+	for _, so := range res.StructOps { // the schema's struct_ops maps, in the schema's order (after the maps, before the rings)
+		d := &structOpsDeclJSON{Type: so.Type, Name: so.KName}
+		for _, o := range so.Ops {
+			d.Ops = append(d.Ops, structOpsOpDeclJSON{Member: o.Member, Program: o.Program})
+		}
+		doc.Maps = append(doc.Maps, mapDeclJSON{Name: so.Const, Kind: "struct_ops", Key: "u32", Value: "-", MaxEntries: 1, StructOps: d})
+	}
 	for _, g := range res.Globals {
+		if g.Class == "ExitInfo" { // a .data record is not in maps.json
+			continue
+		}
 		doc.Globals = append(doc.Globals, globalJSON{Name: g.Name, Section: g.Section, Type: g.TypeName()})
 	}
 	for _, r := range res.Rings {

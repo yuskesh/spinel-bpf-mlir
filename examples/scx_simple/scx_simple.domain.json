@@ -1,0 +1,169 @@
+{
+  "source": "scx_simple.rb",
+  "roots": [
+    {
+      "name": "simple_select_cpu",
+      "kind": "struct_ops",
+      "decl": {
+        "file": "scx_simple.rb",
+        "line": 98,
+        "col": 1
+      },
+      "def": {
+        "file": "scx_simple.rb",
+        "line": 15,
+        "col": 1
+      }
+    },
+    {
+      "name": "simple_enqueue",
+      "kind": "struct_ops",
+      "decl": {
+        "file": "scx_simple.rb",
+        "line": 98,
+        "col": 1
+      },
+      "def": {
+        "file": "scx_simple.rb",
+        "line": 30,
+        "col": 1
+      }
+    },
+    {
+      "name": "simple_dispatch",
+      "kind": "struct_ops",
+      "decl": {
+        "file": "scx_simple.rb",
+        "line": 98,
+        "col": 1
+      },
+      "def": {
+        "file": "scx_simple.rb",
+        "line": 47,
+        "col": 1
+      }
+    },
+    {
+      "name": "simple_running",
+      "kind": "struct_ops",
+      "decl": {
+        "file": "scx_simple.rb",
+        "line": 98,
+        "col": 1
+      },
+      "def": {
+        "file": "scx_simple.rb",
+        "line": 51,
+        "col": 1
+      }
+    },
+    {
+      "name": "simple_stopping",
+      "kind": "struct_ops",
+      "decl": {
+        "file": "scx_simple.rb",
+        "line": 98,
+        "col": 1
+      },
+      "def": {
+        "file": "scx_simple.rb",
+        "line": 62,
+        "col": 1
+      }
+    },
+    {
+      "name": "simple_enable",
+      "kind": "struct_ops",
+      "decl": {
+        "file": "scx_simple.rb",
+        "line": 98,
+        "col": 1
+      },
+      "def": {
+        "file": "scx_simple.rb",
+        "line": 79,
+        "col": 1
+      }
+    },
+    {
+      "name": "simple_init",
+      "kind": "struct_ops",
+      "decl": {
+        "file": "scx_simple.rb",
+        "line": 98,
+        "col": 1
+      },
+      "def": {
+        "file": "scx_simple.rb",
+        "line": 86,
+        "col": 1
+      }
+    },
+    {
+      "name": "simple_exit",
+      "kind": "struct_ops",
+      "decl": {
+        "file": "scx_simple.rb",
+        "line": 98,
+        "col": 1
+      },
+      "def": {
+        "file": "scx_simple.rb",
+        "line": 94,
+        "col": 1
+      }
+    }
+  ],
+  "functions": [
+    {
+      "name": "simple_dispatch",
+      "membership": [
+        "bpf"
+      ]
+    },
+    {
+      "name": "simple_enable",
+      "membership": [
+        "bpf"
+      ]
+    },
+    {
+      "name": "simple_enqueue",
+      "membership": [
+        "bpf"
+      ]
+    },
+    {
+      "name": "simple_exit",
+      "membership": [
+        "bpf"
+      ]
+    },
+    {
+      "name": "simple_init",
+      "membership": [
+        "bpf"
+      ]
+    },
+    {
+      "name": "simple_running",
+      "membership": [
+        "bpf"
+      ]
+    },
+    {
+      "name": "simple_select_cpu",
+      "membership": [
+        "bpf"
+      ]
+    },
+    {
+      "name": "simple_stopping",
+      "membership": [
+        "bpf"
+      ]
+    }
+  ],
+  "edges": [],
+  "diagnostics": []
+}

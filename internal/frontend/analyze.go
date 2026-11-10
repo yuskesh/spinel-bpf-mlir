@@ -15,6 +15,7 @@ import (
 // that call BPF.ebpf_only; together with libCallees they cover every ebpf_only name in bpf.rb — TestEBPFOnlyStatic).
 var ebpfOnlyHelpers = map[string]bool{
 	"BPF.pid_tgid": true, "BPF.ktime_ns": true,
+	"BPF.u64_add": true, "BPF.u64_sub": true, "BPF.u64_mul": true, "BPF.u64_div": true, "BPF.time_before": true, // the u64 intrinsics (u64ops.go)
 	"BPF.fmod_return": true, // fmod_ret's replacement of the return value (only at the program's end and in a guard's return — verdict in program.go)
 	"XdpMd#check":     true, "SkBuff#check": true, "Window#u8": true, "Window#be16": true, "Window#be32": true, "Window#le16": true, "Window#le32": true,
 }
@@ -83,12 +84,18 @@ var libCallees = map[string]bool{
 	"SocketFilterCtx#len": true,                          // socket_filter's __sk_buff len
 	"CgroupSkb#len":       true, "CgroupSkb#check": true, // cgroup_skb's len and packet window
 	"NfCtx#state": true, "NfCtx#skb": true, // netfilter's kernel pointers in bpf_nf_ctx
+	"StructOpsCtx#arg":          true,                            // struct_ops: an integer argument of the member
+	"StructOpsCtx#kptr_or_null": true, "StructOpsCtx#kptr": true, // struct_ops: the socket argument (kptr is refused by name)
+	"KPtr#set_field": true,                                               // struct_ops: a kernel struct integer field write (ebpf.kfield.store)
 	"FmodRetCtx#arg": true,                                               // fmod_ret's integer argument (the same ctx.arg as fentry)
 	"FlowCtx#check":  true, "FlowCtx#key": true, "FlowCtx#set_key": true, // flow_dissector's packet and flow_keys
 	"XdpMd#ingress_ifindex": true, "SkBuff#len": true, "SkBuff#mark": true, "SkBuff#mark=": true, // xdp / tc context fields
 	"XdpMd#adjust_head": true, "XdpMd#adjust_tail": true, // XDP adjust_head / adjust_tail
 	// global variables
 	"Config#value": true, "OptionalConfig#value": true, "Counter#value": true, "Counter#add": true,
+	"Global#value": true, "Global#set": true, "Global#store": true, "ExitInfo#value": true, // a Global (store is refused by name) and the exit record
+	"Scx.select_cpu_dfl": true, "Scx.dsq_insert": true, "Scx.dsq_insert_vtime": true, "Scx.dsq_move_to_local": true, // the sched_ext ops
+	"Scx.create_dsq": true, "Scx.task_set_dsq_vtime": true, "Scx.error": true, "Scx.exit_info": true,
 	"KprobeCtx#arg":   true,
 	"FentryCtx#arg":   true,                                 // fentry's integer argument
 	"DevMap#redirect": true,                                 // xdp's redirect_map terminator
@@ -358,12 +365,16 @@ type Program struct {
 	// fmod_ret's replacement of the return value: FmodVal is the e of the last `BPF.fmod_return(e)` (nil for BPF::FMOD_CALL), FmodGuard
 	// is the literal of the guard's `return BPF.fmod_return(literal) if c` (nil when there is no guard or it is FMOD_CALL). If either is
 	// set, the terminator is ebpf.return … : i32
-	FmodVal    *Expr
-	FmodGuard  *big.Int
-	VerdictPos Pos
-	EndLine    int         // the last line of the def (for the copy in the native twin)
-	Maps       []*MapDecl  // the maps used (in declaration order)
-	Rings      []*RingDecl // the ring buffers used (in declaration order — not in the program's maps [...] or its block arguments)
+	FmodVal          *Expr
+	FmodGuard        *big.Int
+	VerdictPos       Pos
+	EndLine          int         // the last line of the def (for the copy in the native twin)
+	Maps             []*MapDecl  // the maps used (in declaration order)
+	Rings            []*RingDecl // the ring buffers used (in declaration order — not in the program's maps [...] or its block arguments)
+	SOType, SOMember string      // struct_ops: the kernel type and the member
+	SOArgs           []int       // struct_ops: the argument indexes read, ascending and once each
+	SOVal            *Expr       // struct_ops: the return value of an integer member (the last expression)
+	Scx              bool        // the program calls a sched_ext op (the module carries ebpf.scx_kfuncs = "insert")
 }
 
 // Edge is a call edge (for the domain graph).
@@ -383,6 +394,7 @@ type Result struct {
 	Globals     []*GlobalDecl       // the globals the programs use (in declaration order)
 	KernelTypes []*KernelTypeDecl   // the CO-RE kernel structs (in declaration order — when there is a tp_btf program)
 	Funcs       []*Program          // the eBPF-side subprograms (Kind "func" — in declaration order)
+	StructOps   []*StructOpsDecl    // the struct_ops tables
 	Membership  map[string][]string // function → {"user","bpf"}
 	Edges       []Edge
 	Diags       Diags
@@ -405,6 +417,7 @@ type analyzer struct {
 	siteByNode map[int]*callSite          // call node → site
 	anyBadFunc bool                       // some subprogram was stopped
 	plain      *Analysis
+	structOps  []*StructOpsDecl
 	typing     *Analysis
 	diags      Diags
 	maps       map[string]*MapDecl // constant name → declaration
@@ -672,6 +685,7 @@ func analyze(sp Spinel, work, sourcePath, text string, o analyzeOpts) (*Result, 
 			res.Programs = append(res.Programs, p)
 		}
 	}
+	res.StructOps = z.structOps
 	for _, fi := range order { // after the callers (an argument's interval is the union over the call sites)
 		if fi.Bad || !fi.Called {
 			continue
@@ -779,6 +793,7 @@ type rootDecl struct {
 	SysTarget             string    // a target given as a canonical absolute path (empty for a relative one)
 	TArgs                 []TpArg   // tp_btf
 	TFields               []TpField // tracepoint
+	SOType, SOMember      string    // struct_ops: the kernel type and the member this callback fills
 }
 
 // KParam is an argument of a kprobe declaration (the register number and the type Symbol — :u8 … :i64).
@@ -791,7 +806,7 @@ type KParam struct {
 var rootKindOf = map[string]bool{"xdp": true, "fentry": true, "fexit": true, "kprobe": true, "tcx": true, "uprobe": true, "tp_btf": true, "kretprobe": true, "uretprobe": true, "raw_tp": true, "socket_filter": true, "cgroup_skb": true, "tracepoint": true, "ksyscall": true, "netfilter": true, "flow_dissector": true, "sk_lookup": true, "fmod_ret": true}
 
 // ctxClass maps a kind to the context class of the root's argument (under BPF:: in bpf.rb).
-var ctxClass = map[string]string{"xdp": "XdpMd", "fentry": "FentryCtx", "fexit": "FexitCtx", "kprobe": "KprobeCtx", "kretprobe": "KretprobeCtx", "uretprobe": "UretprobeCtx", "sched_cls": "SkBuff", "uprobe": "UprobeCtx", "tp_btf": "TpBtfCtx", "raw_tp": "RawTpCtx", "socket_filter": "SocketFilterCtx", "cgroup_skb": "CgroupSkb", "tracepoint": "TracepointCtx", "ksyscall": "KsyscallCtx", "netfilter": "NfCtx", "flow_dissector": "FlowCtx", "sk_lookup": "SkLookupCtx", "fmod_ret": "FmodRetCtx"}
+var ctxClass = map[string]string{"xdp": "XdpMd", "fentry": "FentryCtx", "fexit": "FexitCtx", "kprobe": "KprobeCtx", "kretprobe": "KretprobeCtx", "uretprobe": "UretprobeCtx", "sched_cls": "SkBuff", "uprobe": "UprobeCtx", "tp_btf": "TpBtfCtx", "raw_tp": "RawTpCtx", "socket_filter": "SocketFilterCtx", "cgroup_skb": "CgroupSkb", "tracepoint": "TracepointCtx", "ksyscall": "KsyscallCtx", "netfilter": "NfCtx", "flow_dissector": "FlowCtx", "sk_lookup": "SkLookupCtx", "fmod_ret": "FmodRetCtx", "struct_ops": "StructOpsCtx"}
 
 func (z *analyzer) scanTop(a *AST, fid int) []rootDecl {
 	var roots []rootDecl
@@ -839,6 +854,20 @@ func (z *analyzer) scanTop(a *AST, fid int) []rootDecl {
 				}
 			case n.Str["name"] == "require_relative" || n.Str["name"] == "load":
 				z.add(Rejected, SB001UnsupportedConstruct, z.pos(a, n), "`%s` is not accepted (the program is one file plus `require \"bpf\"`)", n.Str["name"])
+			case n.Str["name"] == "struct_ops" && constName(a, a.ref(n, "receiver")) == "BPF":
+				d, rs, ok := z.structOpsDecl(a, n)
+				if !ok {
+					continue
+				}
+				z.structOps = append(z.structOps, d)
+				for _, r := range rs {
+					if seen[r.Name] {
+						z.add(Rejected, SB008ProgramShape, z.pos(a, n), "`BPF.struct_ops :%s` uses the callback :%s twice (or it is declared as another root too)", d.Const, r.Name)
+						continue
+					}
+					seen[r.Name] = true
+					roots = append(roots, r)
+				}
 			case rootKindOf[n.Str["name"]] && constName(a, a.ref(n, "receiver")) == "BPF":
 				r, ok := z.rootCall(a, n)
 				if !ok {

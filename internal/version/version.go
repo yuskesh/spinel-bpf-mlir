@@ -14,9 +14,9 @@ import (
 )
 
 const (
-	Version = "v0.10.0"
-	BML     = "065901b"
-	Spinel  = "086d514d"
+	Version = "v0.11.0"
+	BML     = "8ad2e0b"
+	Spinel  = "0d58c397"
 )
 
 // BpfMLIRModule (bpf-mlir's Go module — the go.mod require) and bpfMLIRLine come from a pair of files split between the

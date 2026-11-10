@@ -121,6 +121,7 @@ typedef struct {
 	int64_t line, col, end_line, end_col;
 	sr_str kind, name, type, rbs, owner, signature;
 	int singleton, widened;
+	int has_end; /* an end_line or end_col key was present (as the decode resolves keys; null included) */
 } sr_type_rec;
 
 typedef struct {
@@ -154,6 +155,9 @@ typedef struct {
 } sr_types;
 
 sr_result sr_parse_types(sr_str data, sr_types **out);
+/* (types.go ParseTypesWithAST) ParseTypes for the analysis path; a type record without an end is accepted only as a block
+ * parameter's rename in a, and is then dropped. *sel / *n_sel: the dropped records, in order. */
+sr_result sr_parse_types_ast(sr_str data, const sr_ast *a, sr_types **out, sr_type_rec **sel, size_t *n_sel);
 /* TypeOf / CodegenOf: the record index, or -1 with *count set (0 none, ≥ 2 ambiguous). */
 long sr_type_of(const sr_types *t, const sr_ast *a, const sr_node *n, size_t *count);
 long sr_codegen_of(const sr_types *t, const sr_ast *a, const sr_node *n, size_t *count);
@@ -188,5 +192,6 @@ void sr_dump_result(sr_buf *b, sr_result r); /* "error <q>" or "not-ported <q>" 
 void sr_dump_analysis(sr_buf *b, const sr_analysis *a);
 void sr_dump_ast(sr_buf *b, const sr_ast *a);
 void sr_dump_types(sr_buf *b, const sr_ast *a, const sr_types *t); /* a NULL: no join lines */
+void sr_dump_renames(sr_buf *b, const sr_type_rec *sel, size_t n); /* the block parameter renames */
 
 #endif

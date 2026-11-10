@@ -204,3 +204,20 @@ void sr_dump_analysis(sr_buf *b, const sr_analysis *a)
 	sr_dump_ast(b, a->ast);
 	sr_dump_types(b, a->ast, a->types);
 }
+
+/* The type records ParseTypesWithAST selected as block parameter renames (the rename test: dumpRenames) */
+void sr_dump_renames(sr_buf *b, const sr_type_rec *sel, size_t n)
+{
+	sr_printf(b, "renames %zu\n", n);
+	for (size_t i = 0; i < n; i++) {
+		const sr_type_rec *r = &sel[i];
+		sr_printf(b, "rename %zu", i);
+		qs(b, r->file);
+		sr_printf(b, " %lld %lld", (long long)r->line, (long long)r->col);
+		qs(b, r->kind);
+		qs(b, r->name);
+		qs(b, r->type);
+		qs(b, r->rbs);
+		sr_putc(b, '\n');
+	}
+}

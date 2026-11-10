@@ -71,6 +71,7 @@ fe_expr *fe_binary(fe_prog_ctx *c, const sr_node *n, sr_str op, fe_expr *l, fe_e
 int fe_member_read(fe_prog_ctx *c, const sr_node *n);
 int fe_has_member_read(fe_prog_ctx *c, const sr_node *n);
 sr_str fe_callee_op(fe_prog_ctx *c, const sr_node *n, int member_recv, int *ok);
+fe_expr *fe_u64_op(fe_prog_ctx *c, const sr_node *n, sr_str name, t_nodes as, sr_str ref_var, fe_pos p); /* u64ops.go u64Op */
 fe_name_table fe_origin(fe_prog_ctx *c, const sr_node *n);
 sr_str *fe_sorted_set(const fe_name_table *t, size_t *n);
 /* part B (prog2.c) */

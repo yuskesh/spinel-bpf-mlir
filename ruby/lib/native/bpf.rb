@@ -462,6 +462,236 @@ class Counter
   end
 end
 
+# a Global (.bss — value and set), the exit record (a plain record the twin fills), and the sched_ext ops as models: each call
+# is appended to Scx::LOG (for the per-call unit checks; the kernel's behaviour is checked in the VM).
+class Global
+  def initialize(name, type)
+    @name = name
+    @type = type.to_s
+  end
+
+  def value
+    BPF.global_read(@name, false)
+  end
+
+  def set(v)
+    BPF.set_global(@name, v)
+    0
+  end
+
+  def store(v)
+    raise "twin: BPF::Global#store is not a Global's write (use set)"
+  end
+end
+
+class ExitInfo
+  def initialize(name)
+    @name = name
+    @kind = 0
+  end
+
+  def kind
+    @kind
+  end
+
+  def record_exit(k)
+    @kind = k
+    0
+  end
+
+  def value
+    raise "twin: BPF::ExitInfo has no value on the eBPF side"
+  end
+end
+
+module Scx
+  DSQ_LOCAL = -9223372036854775806
+  SLICE_DFL = 20000000
+  OPS_KEEP_BUILTIN_IDLE = 1
+  OPS_ENQ_LAST = 2
+  OPS_ENQ_EXITING = 4
+  OPS_SWITCH_PARTIAL = 8
+  OPS_ENQ_MIGRATION_DISABLED = 16
+  OPS_ALLOW_QUEUED_WAKEUP = 32
+  OPS_BUILTIN_IDLE_PER_NODE = 64
+  OPS_ALWAYS_ENQ_IMMED = 128
+  OPS_TID_TO_TASK = 256
+  LOG = []
+
+  # the model: the previous CPU, never idle
+  def self.select_cpu_dfl(p, prev, wake)
+    LOG.push("select_cpu_dfl #{prev} #{wake}")
+    [prev, false]
+  end
+
+  def self.dsq_insert(p, dsq, slice, flags)
+    LOG.push("dsq_insert #{dsq} #{slice} #{flags}")
+    0
+  end
+
+  def self.dsq_insert_vtime(p, dsq, slice, vtime, flags)
+    LOG.push("dsq_insert_vtime #{dsq} #{slice} #{vtime} #{flags}")
+    0
+  end
+
+  def self.dsq_move_to_local(dsq)
+    LOG.push("dsq_move_to_local #{dsq}")
+    false
+  end
+
+  def self.create_dsq(dsq, node)
+    LOG.push("create_dsq #{dsq} #{node}")
+    0
+  end
+
+  def self.task_set_dsq_vtime(p, vtime)
+    LOG.push("task_set_dsq_vtime #{vtime}")
+    0
+  end
+
+  def self.error(fmt, a0 = 0, a1 = 0, a2 = 0, a3 = 0, a4 = 0, a5 = 0, a6 = 0, a7 = 0, a8 = 0, a9 = 0, a10 = 0, a11 = 0)
+    LOG.push("error #{fmt}")
+    0
+  end
+
+  # the model's exit: kind 1 (SCX_EXIT_DONE)
+  def self.exit_info(ctx, uei)
+    LOG.push("exit_info")
+    uei.record_exit(1)
+  end
+end
+
+  # >>> u64 intrinsics (TestU64TwinTable compiles the lines between these markers on their own)
+  # The u64 intrinsics, mod 2^64. A u64 is the i64 with the same 64 bits. The arithmetic is on 16-bit limbs: a product of two
+  # limbs is < 2^32, and a column of four such products plus its carry is < 2^35. Extraction uses `>>` (an arithmetic right shift)
+  # and a mask. Assembly forms no −2^63: Spinel reads INT64_MIN as nil even in an Integer slot, so the u64 2^63 (that bit pattern)
+  # cannot be held, and the twin stops with a named error there (the eBPF side computes it as any other value).
+  def self.u64_limb(x, i)
+    (x >> (16 * i)) & 0xFFFF
+  end
+
+  def self.u64_join(r0, r1, r2, r3)
+    lo = r0 + r1 * 65536 + r2 * 4294967296
+    if r3 < 32768
+      r3 * 281474976710656 + lo
+    else
+      if r3 == 32768 && lo == 0
+        raise "twin: the u64 value 2^63 is Spinel's nil marker (INT64_MIN) and cannot be held"
+      end
+      (r3 - 65535) * 281474976710656 - (281474976710656 - lo)
+    end
+  end
+
+  def self.u64_add(a, b)
+    s0 = BPF.u64_limb(a, 0) + BPF.u64_limb(b, 0)
+    s1 = BPF.u64_limb(a, 1) + BPF.u64_limb(b, 1) + (s0 >> 16)
+    s2 = BPF.u64_limb(a, 2) + BPF.u64_limb(b, 2) + (s1 >> 16)
+    s3 = BPF.u64_limb(a, 3) + BPF.u64_limb(b, 3) + (s2 >> 16)
+    BPF.u64_join(s0 & 0xFFFF, s1 & 0xFFFF, s2 & 0xFFFF, s3 & 0xFFFF)
+  end
+
+  def self.u64_sub(a, b)
+    s0 = BPF.u64_limb(a, 0) - BPF.u64_limb(b, 0)
+    w0 = 0
+    if s0 < 0
+      s0 += 65536
+      w0 = 1
+    end
+    s1 = BPF.u64_limb(a, 1) - BPF.u64_limb(b, 1) - w0
+    w1 = 0
+    if s1 < 0
+      s1 += 65536
+      w1 = 1
+    end
+    s2 = BPF.u64_limb(a, 2) - BPF.u64_limb(b, 2) - w1
+    w2 = 0
+    if s2 < 0
+      s2 += 65536
+      w2 = 1
+    end
+    s3 = BPF.u64_limb(a, 3) - BPF.u64_limb(b, 3) - w2
+    if s3 < 0
+      s3 += 65536
+    end
+    BPF.u64_join(s0, s1, s2, s3)
+  end
+
+  def self.u64_mul(a, b)
+    a0 = BPF.u64_limb(a, 0)
+    a1 = BPF.u64_limb(a, 1)
+    a2 = BPF.u64_limb(a, 2)
+    a3 = BPF.u64_limb(a, 3)
+    b0 = BPF.u64_limb(b, 0)
+    b1 = BPF.u64_limb(b, 1)
+    b2 = BPF.u64_limb(b, 2)
+    b3 = BPF.u64_limb(b, 3)
+    c0 = a0 * b0
+    c1 = a0 * b1 + a1 * b0 + (c0 >> 16)
+    c2 = a0 * b2 + a1 * b1 + a2 * b0 + (c1 >> 16)
+    c3 = a0 * b3 + a1 * b2 + a2 * b1 + a3 * b0 + (c2 >> 16)
+    BPF.u64_join(c0 & 0xFFFF, c1 & 0xFFFF, c2 & 0xFFFF, c3 & 0xFFFF)
+  end
+
+  # Restoring long division of u's 64 bits by d ∈ [1, 2^63 − 1]. Invariant: 0 ≤ r < d. The test 2r + b ≥ d is r ≥ t − b with t = d − r,
+  # so 2r + b is formed only when it is < d.
+  def self.u64_div(u, d)
+    if d < 1
+      raise "twin: BPF.u64_div: the divisor #{d} is not within [1, 2^63 - 1]"
+    end
+    r = 0
+    q0 = 0
+    q1 = 0
+    q2 = 0
+    q3 = 0
+    i = 63
+    while i >= 0
+      b = (u >> i) & 1
+      t = d - r
+      if r >= t - b
+        r = r - t + b
+        bit = 1 << (i % 16)
+        if i >= 48
+          q3 = q3 | bit
+        elsif i >= 32
+          q2 = q2 | bit
+        elsif i >= 16
+          q1 = q1 | bit
+        else
+          q0 = q0 | bit
+        end
+      else
+        r = r + r + b
+      end
+      i -= 1
+    end
+    BPF.u64_join(q0, q1, q2, q3)
+  end
+
+  # (s64)(a − b) < 0: the top bit of the modular difference, read from its limbs (no assembly, so a difference of 2^63 is true, as in C).
+  def self.time_before(a, b)
+    s0 = BPF.u64_limb(a, 0) - BPF.u64_limb(b, 0)
+    w = 0
+    if s0 < 0
+      w = 1
+    end
+    s1 = BPF.u64_limb(a, 1) - BPF.u64_limb(b, 1) - w
+    w = 0
+    if s1 < 0
+      w = 1
+    end
+    s2 = BPF.u64_limb(a, 2) - BPF.u64_limb(b, 2) - w
+    w = 0
+    if s2 < 0
+      w = 1
+    end
+    s3 = BPF.u64_limb(a, 3) - BPF.u64_limb(b, 3) - w
+    if s3 < 0
+      s3 += 65536
+    end
+    s3 >= 32768
+  end
+  # <<< u64 intrinsics
+
   def self.ktime_ns
     1
   end
@@ -527,6 +757,32 @@ end
   end
 
   # The fmod_ret twin — integer arguments (12 slots the harness truncated to the declared widths)
+  # The struct_ops twin: the integer arguments of the member (the harness cuts each to the member table's width),
+  # and the socket argument as the KPtr of a tcp_sock Struct the harness made (nil for NULL); other pointers stay unreadable
+  class StructOpsCtx
+    def initialize(ints, kptrs = nil, idx = nil)
+      @ints = ints
+      @kptrs = kptrs
+      @idx = idx
+    end
+
+    def arg(i)
+      @ints[i]
+    end
+
+    # the socket argument (a KPtr of the harness's tcp_sock, or nil for NULL); kptrs and idx as in FentryCtx
+    def kptr_or_null(i, t)
+      j = 0
+      while j < @idx.length
+        if @idx[j] == i
+          return @kptrs[j]
+        end
+        j += 1
+      end
+      raise "twin: argument #{i} is not the socket argument"
+    end
+  end
+
   class FmodRetCtx
     def initialize(ints)
       @ints = ints
@@ -612,6 +868,12 @@ end
 
     def load
       @value
+    end
+
+    # struct_ops: write integer member m of the kernel struct value (the harness reads the members back afterwards)
+    def set_field(field, v)
+      @value[field] = v
+      0
     end
 
     def set_ptr(field, kp)
@@ -2459,6 +2721,10 @@ end
   end
 
   def self.fmod_ret(name, target, opts)
+    name
+  end
+
+  def self.struct_ops(name, type, opts)
     name
   end
 

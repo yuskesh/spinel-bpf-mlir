@@ -9,6 +9,7 @@ import (
 // TestNativeTwinText checks the shape of the twin text (lines unchanged, the harness) and writes it to TWIN_OUT when that is set
 // (for checking the twin by hand).
 func TestNativeTwinText(t *testing.T) {
+	t.Parallel()
 	src := filepath.Join(repoRoot(t), "examples", "xdpcount", "xdpcount.rb")
 	text, _ := os.ReadFile(src)
 	res, err := Analyze(testSpinel(t), t.TempDir(), src, string(text))

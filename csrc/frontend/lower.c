@@ -396,6 +396,136 @@ static int binary(lowerer *l, const fe_expr *e, sv *out)
 static int ring_output(lowerer *l, const fe_ring_decl *r, const fe_expr *mkx, fe_pos pos, int with_result, sv *out);
 static int hash_status(lowerer *l, const fe_expr *e, sv *out);
 
+
+/* ---- scx.go's lowering: the sched_ext ops, the SCX constants and the exit record ---- */
+
+/* scxOperands: the Integer operands at the op's widths (an i32 operand is narrowed with one trunci); names and types in *vs / *tys */
+static int scx_operands(lowerer *l, fe_expr *const *es, size_t n, const int *bits, fe_pos pos, sr_str *vs, const char **tys)
+{
+	for (size_t i = 0; i < n; i++) {
+		sv x;
+		if (expr(l, es[i], &x))
+			return -1;
+		sr_str v = x.name;
+		if (bits[i] < 64) {
+			v = val(l);
+			emit(l, "%S = arith.trunci %S : i64 to i%d %L", v, x.name, (int64_t)bits[i], pos);
+		}
+		vs[i] = v;
+		tys[i] = bits[i] == 32 ? "i32" : "i64";
+	}
+	return 0;
+}
+
+static sr_str scx_join(const sr_str *vs, size_t n)
+{
+	sr_buf b = {0};
+	for (size_t i = 0; i < n; i++) {
+		if (i)
+			sr_puts(&b, ", ");
+		sr_putstr(&b, vs[i]);
+	}
+	return sr_bufstr(&b);
+}
+
+static sr_str scx_join_c(const char *const *vs, size_t n)
+{
+	sr_buf b = {0};
+	for (size_t i = 0; i < n; i++) {
+		if (i)
+			sr_puts(&b, ", ");
+		sr_puts(&b, vs[i]);
+	}
+	return sr_bufstr(&b);
+}
+
+static void scx_bits(sr_str op, size_t n, int *bits)
+{
+	for (size_t i = 0; i < n; i++)
+		bits[i] = sr_eqc(op, "error") ? 64 : fe_scx_op_bits(op, (int)i);
+}
+
+static int scx_stmt(lowerer *l, const fe_stmt *s)
+{
+	size_t n = s->n_scx_args;
+	int bits[16];
+	sr_str vs[16];
+	const char *tys[16];
+	scx_bits(s->op, n, bits);
+	if (scx_operands(l, s->scx_args, n, bits, s->pos, vs, tys))
+		return -1;
+	if (sr_eqc(s->op, "error")) {
+		if (n == 0)
+			emit(l, "ebpf.scx.error %q () %L", s->path, s->pos);
+		else
+			emit(l, "ebpf.scx.error %q (%S) : %S %L", s->path, scx_join(vs, n), scx_join_c(tys, n), s->pos);
+		return 0;
+	}
+	if (sr_eqc(s->op, "dsq_move_to_local")) { /* the Bool is dropped (whether a task was moved — not a status) */
+		sr_str r = val(l);
+		emit(l, "%S = ebpf.scx.dsq_move_to_local %S : i64 -> i1 %L", r, vs[0], s->pos);
+		return 0;
+	}
+	emit(l, "ebpf.scx.%S %S, %S : !ebpf.kptr<%q>, %S %L", s->op, env_get(&l->env, s->var, NULL).name, scx_join(vs, n), s->kt->name,
+	     scx_join_c(tys, n), s->pos);
+	return 0;
+}
+
+static int scx_select(lowerer *l, const fe_stmt *s)
+{
+	int bits[2] = {32, 64};
+	sr_str vs[2];
+	const char *tys[2];
+	if (scx_operands(l, s->scx_args, s->n_scx_args, bits, s->pos, vs, tys))
+		return -1;
+	sr_str r = val(l);
+	emit(l, "%S:2 = ebpf.scx.select_cpu_dfl %S, %S, %S : !ebpf.kptr<%q>, i32, i64 -> i32, i1 %L", r, env_get(&l->env, s->var, NULL).name,
+	     vs[0], vs[1], s->kt->name, s->pos);
+	sr_str x = val(l);
+	emit(l, "%S = arith.extsi %S#0 : i32 to i64 %L", x, r, s->pos);
+	const char *comma = memchr(s->path.p, ',', s->path.n);
+	sr_str cpu = {s->path.p, (size_t)(comma - s->path.p)}, idle = {comma + 1, s->path.n - (size_t)(comma - s->path.p) - 1};
+	env_set(&l->env, cpu, mk(x, "i64"));
+	env_set(&l->env, idle, mk(cat(r, "#1"), "i1"));
+	return 0;
+}
+
+/* scxExit: the exit info argument, its check, and ebpf.scx.exit_info in the present region */
+static void scx_exit(lowerer *l, const fe_stmt *s)
+{
+	sr_str n = val(l);
+	emit(l, "%S = ebpf.ctx.arg %%ctx[0] : !ebpf.ctx<\"struct_ops\"> -> !ebpf.kptr_or_null<\"scx_exit_info\"> %L", n, s->pos);
+	emit(l, "ebpf.kptr.check %S : !ebpf.kptr_or_null<\"scx_exit_info\"> present {", n);
+	sr_str e = val(l);
+	emit(l, "^present(%S: !ebpf.kptr<\"scx_exit_info\">):", e);
+	emit(l, "  ebpf.scx.exit_info %S, @%S : !ebpf.kptr<\"scx_exit_info\"> %L", e, s->glob->name, s->pos);
+	emit(l, "  ebpf.yield %L", s->pos);
+	emit(l, "} absent {");
+	emit(l, "  ebpf.yield %L", s->pos);
+	emit(l, "} %L", s->pos);
+}
+
+static int scx_expr(lowerer *l, const fe_expr *e, sv *out)
+{
+	int bits[4];
+	sr_str vs[4];
+	const char *tys[4];
+	scx_bits(e->op, e->n_args, bits);
+	if (scx_operands(l, e->args, e->n_args, bits, e->pos, vs, tys))
+		return -1;
+	sr_str r = val(l);
+	if (sr_eqc(e->op, "dsq_move_to_local")) {
+		emit(l, "%S = ebpf.scx.dsq_move_to_local %S : i64 -> i1 %L", r, vs[0], e->pos);
+		*out = mk(r, "i1");
+		return 0;
+	}
+	emit(l, "%S = ebpf.scx.create_dsq %S : %S -> i32 %L", r, scx_join(vs, e->n_args), scx_join_c(tys, e->n_args), e->pos);
+	sr_str x = val(l);
+	emit(l, "%S = arith.extsi %S : i32 to i64 %L", x, r, e->pos);
+	*out = mk(x, "i64");
+	return 0;
+}
+
 static int expr(lowerer *l, const fe_expr *e, sv *out)
 {
 	sr_str k = e->kind;
@@ -440,6 +570,45 @@ static int expr(lowerer *l, const fe_expr *e, sv *out)
 	if (is(k, "ktime")) {
 		sr_str v = val(l);
 		emit(l, "%S = ebpf.ktime.ns : i64 %L", v, e->pos);
+		*out = mk(v, "i64");
+		return 0;
+	}
+	if (is(k, "scx")) /* dsq_move_to_local / create_dsq as values */
+		return scx_expr(l, e, out);
+	if (is(k, "u64op")) { /* a u64 intrinsic (i64 operations without nsw / nuw / exact flags; u64ops.go u64Expr) */
+		sv a, b;
+		if (expr(l, e->args[0], &a) || expr(l, e->args[1], &b))
+			return -1;
+		sr_str v = val(l);
+		if (is(e->op, "u64_add") || is(e->op, "u64_sub") || is(e->op, "u64_mul")) {
+			const char *op = is(e->op, "u64_add") ? "arith.addi" : is(e->op, "u64_sub") ? "arith.subi" : "arith.muli";
+			emit(l, "%S = %s %S, %S : i64 %L", v, op, a.name, b.name, e->pos);
+			*out = mk(v, "i64");
+			return 0;
+		}
+		if (is(e->op, "time_before")) { /* (s64)(a − b) < 0 */
+			sr_str z = val(l);
+			emit(l, "%S = arith.subi %S, %S : i64 %L", v, a.name, b.name, e->pos);
+			emit(l, "%S = arith.constant 0 : i64 %L", z, e->pos);
+			sr_str r = val(l);
+			emit(l, "%S = arith.cmpi slt, %S, %S : i64 %L", r, v, z, e->pos);
+			*out = mk(r, "i1");
+			return 0;
+		}
+		if (is(e->op, "u64_div")) { /* maxui serves bpf-mlir's ArithLegality proof; the identity on the divisor the frontend proved >= 1 */
+			emit(l, "%S = arith.constant 1 : i64 %L", v, e->pos);
+			sr_str d = val(l);
+			emit(l, "%S = arith.maxui %S, %S : i64 %L", d, b.name, v, e->pos);
+			sr_str q = val(l);
+			emit(l, "%S = arith.divui %S, %S : i64 %L", q, a.name, d, e->pos);
+			*out = mk(q, "i64");
+			return 0;
+		}
+		return fail(l, "u64 intrinsic %q has no lowering", e->op);
+	}
+	if (is(k, "scxconst")) { /* an SCX constant (its i64 bit pattern, resolved at load) */
+		sr_str v = val(l);
+		emit(l, "%S = ebpf.scx.const %q : i64 %L", v, e->path, e->pos);
 		*out = mk(v, "i64");
 		return 0;
 	}
@@ -566,7 +735,7 @@ static int expr(lowerer *l, const fe_expr *e, sv *out)
 		sr_str v = val(l);
 		if (is(k, "retval"))
 			emit(l, "%S = ebpf.ctx.retval %%ctx after %d : !ebpf.ctx<\"fexit\"> -> i%d %L", v, e->idx, e->field->bits, e->pos);
-		else if (is(l->kind, "tp_btf") || is(l->kind, "fentry") || is(l->kind, "fmod_ret"))
+		else if (is(l->kind, "tp_btf") || is(l->kind, "fentry") || is(l->kind, "fmod_ret") || is(l->kind, "struct_ops"))
 			emit(l, "%S = ebpf.ctx.arg %%ctx[%d] : !ebpf.ctx<%q> -> i%d %L", v, e->idx, l->kind, e->field->bits, e->pos);
 		else if (is(l->kind, "ksyscall"))
 			emit(l, "%S = ebpf.ksyscall.arg %%ctx %d : !ebpf.ctx<\"ksyscall\"> -> i%d %L", v, e->idx, e->field->bits, e->pos);
@@ -1568,6 +1737,39 @@ static int stmt(lowerer *l, const fe_stmt *s)
 		region_arms(l, &g, "ebpf.yield", s->if_pos, s->pos, "} absent {");
 		return 0;
 	}
+	if (is(k, "scx")) /* a sched_ext op as a statement */
+		return scx_stmt(l, s);
+	if (is(k, "scxsel"))
+		return scx_select(l, s);
+	if (is(k, "scxexit")) {
+		scx_exit(l, s);
+		return 0;
+	}
+	if (is(k, "gset")) { /* a Global's write (ebpf.global.store — one trunci below 64 bits) */
+		sv x;
+		if (expr(l, s->val, &x))
+			return -1;
+		sr_str d = x.name;
+		if (s->glob->bits < 64) {
+			d = val(l);
+			emit(l, "%S = arith.trunci %S : i64 to i%d %L", d, x.name, s->glob->bits, s->pos);
+		}
+		emit(l, "ebpf.global.store @%S, %S : i%d %L", s->glob->name, d, s->glob->bits, s->pos);
+		return 0;
+	}
+	if (is(k, "kstore")) { /* the socket-write rule: write an integer field of the checked socket (ebpf.kfield.store) — the value is narrowed at the store */
+		sv x;
+		if (expr(l, s->val, &x))
+			return -1;
+		sr_str v = x.name;
+		if (s->field->bits < 64) {
+			v = val(l);
+			emit(l, "%S = arith.trunci %S : i64 to i%d %L", v, x.name, s->field->bits, s->pos);
+		}
+		emit(l, "ebpf.kfield.store %S %q, %S : !ebpf.kptr<%q>, i%d %L", env_get(&l->env, s->var, NULL).name, s->field->name, v, s->kt->name,
+		     s->field->bits, s->pos);
+		return 0;
+	}
 	if (is(k, "kcopy")) {
 		borrow br;
 		if (!bor_get(&l->refs, s->var, &br))
@@ -1884,7 +2086,15 @@ static int lower_program(fe_z *z, sr_buf *b, const fe_program *p, sr_buf *err)
 	wr(l, b, "^bb0(%%ctx: !ebpf.ctx<%q>%S):\n", p->kind, sr_bufstr(&params));
 	int rc = stmts(l, &p->body);
 	if (!rc) {
-		if (fmod_uses(p)) {
+		if (p->so_val) { /* a struct_ops integer member's return value (u32 — ebpf.return … : i32) */
+			sv x;
+			rc = expr(l, p->so_val, &x);
+			if (!rc) {
+				sr_str r = val(l);
+				emit(l, "%S = arith.trunci %S : i64 to i32 %L", r, x.name, p->verdict_pos);
+				wr(l, b, "  ebpf.return %S : i32 %L\n", r, p->verdict_pos);
+			}
+		} else if (fmod_uses(p)) {
 			rc = lower_fmod_return(l, p);
 		} else if (p->guard_verdict.n) {
 			wr(l, b, "  ebpf.verdict.if %S %q else %q %L\n", l->fired, p->guard_verdict, p->verdict, p->verdict_pos);
@@ -2001,6 +2211,23 @@ sr_result fe_lower(fe_z *z, const fe_result *r, sr_buf *out)
 		return z->np;
 	if (rc)
 		return sr_err_str(sr_bufstr(&err));
+	int scx = 0;
+	for (size_t i = 0; i < r->n_programs; i++)
+		scx = scx || r->programs[i]->scx;
+	if (scx) { /* the sched_ext op forms (bpf-mlir's insert set) — the module attribute wraps every op after the two comment lines */
+		sr_str t = sr_bufstr(&b);
+		const char *p1 = memchr(t.p, '\n', t.n);
+		const char *p2 = p1 ? memchr(p1 + 1, '\n', t.n - (size_t)(p1 + 1 - t.p)) : NULL;
+		if (p2) {
+			size_t k = (size_t)(p2 + 1 - t.p);
+			sr_buf w = {0};
+			sr_putstr(&w, (sr_str){t.p, k});
+			sr_puts(&w, "module attributes {ebpf.scx_kfuncs = \"insert\"} {\n");
+			sr_putstr(&w, (sr_str){t.p + k, t.n - k});
+			sr_puts(&w, "}\n");
+			b = w;
+		}
+	}
 	if (!fe_verify_world(sr_bufstr(&b), &err))
 		return sr_err_str(sr_bufstr(&err));
 	sr_putstr(out, sr_bufstr(&b));

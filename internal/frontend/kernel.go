@@ -89,6 +89,10 @@ func (z *analyzer) kernelTypeDecl(a *AST, n *Node, structs map[string]*structInf
 		bad(p, "kernel struct %s is declared twice", c)
 		return
 	}
+	if as[1].Str["content"] == "scx_exit_info" { // the frontend owns this row (the four fields ebpf.scx.exit_info reads)
+		bad(z.pos(a, as[1]), "the kernel type scx_exit_info is the frontend's (the fields BPF::Scx.exit_info reads) — it is not declared; an exit callback writes it with `BPF::Scx.exit_info(ctx, U)`")
+		return
+	}
 	d := &KernelTypeDecl{Const: c, Name: as[1].Str["content"], Pos: p, StructPos: s.pos}
 	var got []string
 	for _, e := range a.arr(as[2], "elements") {
@@ -579,7 +583,7 @@ func noTpBtf(res *Result) error {
 
 // usesKernelTypes reports whether the program reads kernel structs (tp_btf, or fentry with args).
 func usesKernelTypes(p *Program) bool {
-	return p != nil && (p.Kind == "tp_btf" || (p.Kind == "fentry" && len(p.TArgs) > 0))
+	return p != nil && (p.Kind == "tp_btf" || ((p.Kind == "fentry" || p.Kind == "struct_ops") && len(p.TArgs) > 0))
 }
 
 // hasTpBtf reports whether some program reads kernel structs (tp_btf, or fentry with args); it is the trigger for the harness's
@@ -713,7 +717,7 @@ func (c *progCtx) kcheckCall(v *Node) bool {
 	if v == nil || v.Type != "CallNode" {
 		return false
 	}
-	if v.Str["name"] == "kptr_or_null" && c.isVarRead(c.a.ref(v, "receiver"), c.param) && usesKernelTypes(c.prog) {
+	if v.Str["name"] == "kptr_or_null" && c.isVarRead(c.a.ref(v, "receiver"), c.param) && (usesKernelTypes(c.prog) || c.prog.Kind == "struct_ops") {
 		return true
 	}
 	return v.Str["name"] == "ptr" && c.isKptrRead(c.a.ref(v, "receiver"))
@@ -734,8 +738,9 @@ func (c *progCtx) kcheckStmt(w, ifn *Node, refVar string) (Stmt, bool) {
 	}
 	as := args(c.a, v)
 	s := Stmt{Kind: "kcheck", Var: name, Pos: c.z.pos(c.a, w), IfPos: c.z.pos(c.a, ifn)}
+	soSock := false // R1: the pointer is the struct_ops member's checked socket argument (the only writable one, R2)
 	if v.Str["name"] == "kptr_or_null" {
-		if want := map[string]string{"tp_btf": "TpBtfCtx#kptr_or_null", "fentry": "FentryCtx#kptr_or_null"}[c.prog.Kind]; callee != want {
+		if want := map[string]string{"tp_btf": "TpBtfCtx#kptr_or_null", "fentry": "FentryCtx#kptr_or_null", "struct_ops": "StructOpsCtx#kptr_or_null"}[c.prog.Kind]; callee != want {
 			c.add(Rejected, SB011ShadowedName, v, "`kptr_or_null` resolves to %s, not BPF::%s", callee, want)
 			return Stmt{}, false
 		}
@@ -754,6 +759,12 @@ func (c *progCtx) kcheckStmt(w, ifn *Node, refVar string) (Stmt, bool) {
 		i := int(nb.Int64())
 		ta := c.prog.tpArg(i)
 		h := c.z.ktHandles[as[1].Str["name"]]
+		if c.prog.Kind == "struct_ops" { // the socket-argument rule: the member's socket argument, as a tcp_sock
+			if ta = c.structOpsSock(v, as, i, h); ta == nil {
+				return Stmt{}, false
+			}
+			soSock = soMemberOf(c.prog).Args[i].Kind == "sock" // only the tcp_sock is writable (the socket-write rule); a task is read only
+		}
 		switch {
 		case ta == nil:
 			c.add(Rejected, SB033KernelTypeShape, as[0], "argument %d is not declared in `BPF.%s … args:`", i, c.prog.Kind)
@@ -802,12 +813,16 @@ func (c *progCtx) kcheckStmt(w, ifn *Node, refVar string) (Stmt, bool) {
 	pre := c.env
 	c.env = copyEnv(pre)
 	c.kptrs[name] = s.KT
+	if soSock {
+		c.soSock[name] = true
+	}
 	var then []*Node
 	if st := c.a.ref(ifn, "statements"); st != nil {
 		then = c.a.arr(st, "body")
 	}
 	s.Then = c.stmts(then, refVar)
 	delete(c.kptrs, name)
+	delete(c.soSock, name)
 	thenEnv := c.env
 	c.env = copyEnv(pre)
 	if sub := c.a.ref(ifn, "subsequent"); sub != nil {

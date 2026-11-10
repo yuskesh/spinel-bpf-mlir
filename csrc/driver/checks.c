@@ -241,6 +241,114 @@ static const struct jv *core_part(const struct jv *doc, const char *key)
 
 /* ---- checkMapSymbols / checkSchemaSHA ---- */
 
+/* so_sym_type names an ELF symbol type as the struct_ops check prints it (Go: soSymType). */
+static char *so_sym_type(int t)
+{
+	switch (t) {
+	case STT_OBJECT: return xstrdup("OBJECT");
+	case STT_FUNC: return xstrdup("FUNC");
+	case STT_NOTYPE: return xstrdup("NOTYPE");
+	case STT_SECTION: return xstrdup("SECTION");
+	case STT_FILE: return xstrdup("FILE");
+	case STT_COMMON: return xstrdup("COMMON");
+	case STT_TLS: return xstrdup("TLS");
+	}
+	return xasprintf("type %d", t);
+}
+
+/* checkStructOpsSymbols (build.go), the struct_ops symbol rule: each struct_ops map of the schema is exactly one symbol of
+ * its name, of any type, and that symbol is an OBJECT in .struct_ops.link; .struct_ops.link holds no other symbol of any type.
+ * Go reads .symtab with debug/elf (Symbols: the null symbol left out); a section index of 0 is "(undefined)", one past the
+ * section count "(special)". */
+static err_t check_struct_ops_symbols(const char *elf, size_t elf_len, const struct strv *want)
+{
+	if (elf_version(EV_CURRENT) == EV_NONE)
+		return errf("reading the ELF for its struct_ops symbols: libelf: %s", elf_errmsg(-1));
+	Elf *e = elf_memory((char *)elf, elf_len);
+	size_t shstr, shnum;
+	if (!e || elf_getshdrstrndx(e, &shstr) != 0 || elf_getshdrnum(e, &shnum) != 0)
+		return errf("reading the ELF for its struct_ops symbols: %s", elf_errmsg(-1));
+	struct strv names = {0}, types = {0}, secs = {0};
+	for (Elf_Scn *scn = NULL; (scn = elf_nextscn(e, scn));) {
+		GElf_Shdr sh;
+		if (!gelf_getshdr(scn, &sh) || sh.sh_type != SHT_SYMTAB)
+			continue;
+		Elf_Data *d = elf_getdata(scn, NULL);
+		size_t n = sh.sh_entsize ? sh.sh_size / sh.sh_entsize : 0;
+		for (size_t i = 1; d && i < n; i++) {
+			GElf_Sym sym;
+			if (!gelf_getsym(d, (int)i, &sym))
+				continue;
+			const char *nm = elf_strptr(e, sh.sh_link, sym.st_name);
+			const char *sec = "(undefined)";
+			if (sym.st_shndx >= shnum) {
+				sec = "(special)";
+			} else if (sym.st_shndx > 0) {
+				GElf_Shdr ts;
+				Elf_Scn *t = elf_getscn(e, sym.st_shndx);
+				sec = t && gelf_getshdr(t, &ts) ? elf_strptr(e, shstr, ts.sh_name) : NULL;
+			}
+			if (!sec) {
+				elf_end(e);
+				return errf("reading the ELF symbols: a section name: %s", elf_errmsg(-1));
+			}
+			strv_push(&names, xstrdup(nm ? nm : ""));
+			strv_push(&types, so_sym_type(GELF_ST_TYPE(sym.st_info)));
+			strv_push(&secs, xstrdup(sec));
+		}
+		break; /* Go's Symbols reads the first SHT_SYMTAB */
+	}
+	elf_end(e);
+	for (size_t w = 0; w < want->n; w++) {
+		struct strv found = {0}; /* "<TYPE> in <section>" */
+		size_t at = 0;
+		for (size_t i = 0; i < names.n; i++)
+			if (!strcmp(names.v[i], want->v[w])) {
+				strv_push(&found, xasprintf("%s in %s", types.v[i], secs.v[i]));
+				at = i;
+			}
+		if (found.n == 0)
+			return errf("the struct_ops map %s is absent from the ELF (want one OBJECT symbol in .struct_ops.link)", want->v[w]);
+		if (found.n > 1) {
+			strv_sort(&found);
+			size_t len = 1;
+			for (size_t i = 0; i < found.n; i++)
+				len += strlen(found.v[i]) + 2;
+			char *j = xmalloc(len);
+			j[0] = 0;
+			for (size_t i = 0; i < found.n; i++) {
+				if (i)
+					strcat(j, ", ");
+				strcat(j, found.v[i]);
+			}
+			return errf("the struct_ops map %s has %zu symbols (want one OBJECT symbol in .struct_ops.link): %s", want->v[w], found.n, j);
+		}
+		if (strcmp(types.v[at], "OBJECT"))
+			return errf("the struct_ops map %s is a %s symbol in %s (want one OBJECT symbol in .struct_ops.link)", want->v[w], types.v[at], secs.v[at]);
+		if (strcmp(secs.v[at], ".struct_ops.link"))
+			return errf("the struct_ops map %s is in %s, not .struct_ops.link", want->v[w], secs.v[at]);
+	}
+	struct strv extra = {0};
+	for (size_t i = 0; i < names.n; i++) {
+		if (strcmp(secs.v[i], ".struct_ops.link"))
+			continue;
+		int declared = 0;
+		for (size_t w = 0; w < want->n; w++)
+			declared = declared || !strcmp(names.v[i], want->v[w]);
+		if (declared)
+			continue;
+		if (!names.v[i][0]) {
+			strv_push(&extra, xasprintf("an unnamed %s symbol", types.v[i]));
+		} else {
+			strv_push(&extra, xstrdup(names.v[i]));
+		}
+	}
+	strv_sort(&extra);
+	if (extra.n > 0)
+		return errf(".struct_ops.link holds %s, which is not a struct_ops map of the schema", extra.v[0]);
+	return NULL;
+}
+
 err_t check_map_symbols(const char *elf_path, const char *schema, size_t schema_len)
 {
 	char *elf;
@@ -259,12 +367,17 @@ err_t check_map_symbols(const char *elf_path, const char *schema, size_t schema_
 	struct jv *doc;
 	if ((e = strict_doc(schema, schema_len, &doc)))
 		return e;
-	struct strv syms = {0}, want = {0};
+	struct strv syms = {0}, want = {0}, so = {0};
 	for (size_t i = 0; i < nn; i++)
 		strv_push(&syms, names[i]);
 	const struct jv *maps = core_part(doc, "maps");
-	for (size_t i = 0; maps && i < maps->n; i++)
-		strv_push(&want, xstrdup(jv_str(&maps->items[i], "symbol", "schema.core.maps[]")));
+	for (size_t i = 0; maps && i < maps->n; i++) {
+		const char *sym = jv_str(&maps->items[i], "symbol", "schema.core.maps[]");
+		if (!strcmp(jv_str(&maps->items[i], "kind", "schema.core.maps[]"), "struct_ops")) /* rule 2, below */
+			strv_push(&so, xstrdup(sym));
+		else
+			strv_push(&want, xstrdup(sym));
+	}
 	strv_sort(&syms);
 	strv_sort(&want);
 	int same = syms.n == want.n;
@@ -273,7 +386,7 @@ err_t check_map_symbols(const char *elf_path, const char *schema, size_t schema_
 	/* Go compares strings.Join(…, ","): two lists with a comma inside a name could join equal; map names have no comma */
 	if (!same)
 		return errf("the ELF's map symbols %s differ from the schema's maps %s", strv_go(&syms), strv_go(&want));
-	return NULL;
+	return check_struct_ops_symbols(elf, elf_len, &so);
 }
 
 err_t check_schema_sha(const char *elf_path, const char *schema, size_t schema_len, char sha_out[65])
@@ -398,6 +511,8 @@ err_t check_records_table(const char *schema, size_t schema_len, const char *tab
 		want_line(&want, records, msym, vs);
 	}
 	for (size_t i = 0; globals && i < globals->n; i++) {
+		if (!strcmp(jv_str(&globals->items[i], "section", "schema.core.globals[]"), "data"))
+			continue; /* a .data record global (BPF::ExitInfo) has no G row */
 		const struct jv *g = &globals->items[i], *t = jv_obj(g, "type", "schema.core.globals[]");
 		const char *name = jv_str(g, "name", "schema.core.globals[]");
 		smap_set(&wantG, name, xasprintf("G|%s|%s|%s%lld", name, jv_str(g, "section", "schema.core.globals[]"),

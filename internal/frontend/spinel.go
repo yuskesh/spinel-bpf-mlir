@@ -67,7 +67,8 @@ func (s Spinel) Analyze(dir, base, text string) (*Analysis, Diags, error) {
 	if err != nil {
 		return nil, nil, err
 	}
-	t, err := ParseTypes(data)
+	// The types are bound to this invocation's AST, after both are decoded and before any index or span use
+	t, _, err := ParseTypesWithAST(data, a)
 	if err != nil {
 		return nil, nil, err
 	}

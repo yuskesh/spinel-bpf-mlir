@@ -11,13 +11,13 @@ import (
 // formBuildArgs is the build tag used when a test runs `go build` on spinelbpf (the public form).
 var formBuildArgs = []string{}
 
-// versionFlagWant is the expected `--version` output (the public form — the bpf-mlir v1.22.0 source release and
-// go-bpf-mlir v0.20.0).
-var versionFlagWant = regexp.MustCompile(`^spinel-bpf-mlir v0\.10\.0 \(commit ([0-9a-f]{12}(\+dirty)?|unknown)\)
-bpf-mlir v1\.22\.0 \(commit 2bf11230; Go packages github\.com/yuskesh/go-bpf-mlir v0\.20\.0, go\.mod require\)
-bml v0\.1\.1 \(commit ad2eafd\)
-spinel 086d514d
-ebpf-compile: bpf-mlir v1\.22\.0 \(commit 2bf112303e42e1a176fc8b248948277ef3dfffc0\)
+// versionFlagWant is the expected `--version` output (the public form — the bpf-mlir v1.23.0 source release and
+// go-bpf-mlir v0.21.0).
+var versionFlagWant = regexp.MustCompile(`^spinel-bpf-mlir v0\.11\.0 \(commit ([0-9a-f]{12}(\+dirty)?|unknown)\)
+bpf-mlir v1\.23\.0 \(commit 1a58c8d6; Go packages github\.com/yuskesh/go-bpf-mlir v0\.21\.0, go\.mod require\)
+bml v0\.2\.0 \(commit 8ad2e0b\)
+spinel 0d58c397
+ebpf-compile: bpf-mlir v1\.23\.0 \(commit 1a58c8d6ef57262dfaf68989c370925caddc66f9\)
 $`)
 
 // publicVersionText composes the 5 lines of the public form's `spinelbpf --version` from the pin and version constants.

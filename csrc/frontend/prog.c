@@ -319,6 +319,34 @@ fe_prog_ctx *fe_new_ctx(fe_analysis *z, const sr_ast *a, const sr_node *d, sr_st
 typedef struct {
 	fe_prog_ctx *c;
 	sr_str kind;
+	int n;
+} ret_walk;
+
+/* each ReturnNode of a no-verdict program is SB008. */
+/* the same walk for a struct_ops integer member, which returns its last expression */
+static int so_ret_walk_fn(void *u, const sr_node *x)
+{
+	ret_walk *w = u;
+	if (t_is(x, "ReturnNode")) {
+		fe_cadd(w->c, FE_REJECTED, FE_SB008, x, "the %s member `%s` returns its last expression — `return` is not accepted here (an early exit would still run the statements after it)", w->c->prog->so_type, w->c->prog->so_member);
+		w->n++;
+	}
+	return 1;
+}
+
+static int ret_walk_fn(void *u, const sr_node *x)
+{
+	ret_walk *w = u;
+	if (t_is(x, "ReturnNode")) {
+		fe_cadd(w->c, FE_REJECTED, FE_SB008, x, "a %s program returns nothing — `return` is not accepted here (a value would be dropped, and an early exit would still run the statements after it)", w->kind);
+		w->n++;
+	}
+	return 1;
+}
+
+typedef struct {
+	fe_prog_ctx *c;
+	sr_str kind;
 	int bad;
 } kind_walk;
 
@@ -393,6 +421,8 @@ fe_program *fe_program_of(fe_analysis *z, const sr_ast *a, const sr_node *d, con
 	p->t_fields = r->tfields; /* shared with the root, as Go shares the slice */
 	p->n_t_fields = r->n_tfields;
 	p->t_fields_nil = r->tfields_nil;
+	p->so_type = r->so_type;
+	p->so_member = r->so_member;
 	p->f_params_nil = p->globals_nil = p->maps_nil = p->rings_nil = 1;
 	p->body.nil = 1;
 	size_t before = z->z->diags.n;
@@ -430,7 +460,45 @@ fe_program *fe_program_of(fe_analysis *z, const sr_ast *a, const sr_node *d, con
 	t_walk(a, d, kind_walk_fn, &kw);
 	if (kw.bad)
 		return NULL;
-	if (fe_verdicts_of(r->kind).n == 0) {
+	if (fe_streq(r->kind, "struct_ops") && !fe_streq(r->ret, "void")) { /* an integer member: the last expression is the return value */
+		if (stmts.n == 0) {
+			fe_cadd(c, FE_REJECTED, FE_SB008, d, "the %s member `%s` returns %s — its callback must end with an Integer expression", r->so_type,
+				r->so_member, r->ret);
+			return NULL;
+		}
+		ret_walk rw = {c, r->kind, 0};
+		t_walk(a, d, so_ret_walk_fn, &rw);
+		if (rw.n > 0)
+			return NULL;
+		const sr_node *last = stmts.v[stmts.n - 1];
+		p->body = fe_ctx_stmts(c, stmts.v, stmts.n - 1, (sr_str){0});
+		fe_expr *e = fe_ctx_expr(c, last, (sr_str){0});
+		if (!e)
+			return NULL;
+		if (e->bool_ || e->wide) {
+			fe_cadd(c, FE_REJECTED, FE_SB014, last, "the %s member `%s` returns %s — its last expression must be an Integer that fits it", r->so_type,
+				r->so_member, r->ret);
+			return NULL;
+		}
+		int64_t bits;
+		int sg;
+		t_record_type(r->ret, &bits, &sg);
+		fe_ival w = fe_width_range(bits, sg);
+		if (!fe_iv_within(e->iv, w.lo, w.hi)) {
+			fe_cadd(c, FE_REJECTED, FE_SB014, last, "the return value of the %s member `%s` may not fit %s (its range is %I, %s is %I) — narrow it first",
+				r->so_type, r->so_member, r->ret, e->iv, r->ret, w);
+			return NULL;
+		}
+		p->so_val = e;
+		p->verdict = S("done");
+		p->verdict_pos = fe_cpos(c, last);
+	} else if (fe_verdicts_of(r->kind).n == 0) {
+		/* a `return` anywhere in the program's def stops (fe_ctx_stmts skips ReturnNodes and these kinds run no verdict check,
+		 * so it was dropped silently). The walk covers only this def (its body, arms and blocks) — program.go's return walk. */
+		ret_walk rw = {c, r->kind, 0};
+		t_walk(a, d, ret_walk_fn, &rw);
+		if (rw.n > 0)
+			return NULL;
 		p->body = fe_ctx_stmts(c, stmts.v, stmts.n, (sr_str){0});
 		p->verdict = S("done");
 		p->verdict_pos = fe_cpos(c, d);
@@ -592,6 +660,24 @@ fe_stmts fe_ctx_stmts(fe_prog_ctx *c, const sr_node *const *ns, size_t nn, sr_st
 		const sr_node *n = ns[i];
 		sr_str nm = t_str(n, "name");
 		if (t_is(n, "CallNode")) {
+			{ /* a sched_ext op as a statement */
+				fe_stmt xs;
+				int xok;
+				if (fe_scx_stmt(c, n, ref_var, &xs, &xok)) {
+					if (xok)
+						stmts_push(&out, xs);
+					continue;
+				}
+			}
+			{ /* the socket-write rule: `q.set_field(:m, v)` (and the old name `q.store` refused) */
+				fe_stmt ks;
+				int kok;
+				if (fe_kstore_call(c, n, &ks, &kok)) {
+					if (kok)
+						stmts_push(&out, ks);
+					continue;
+				}
+			}
 			fe_func_info *fi = fe_user_call(c->z, a, n);
 			if (fi) {
 				fe_expr *e = fe_sub_call(c, n, fi, ref_var);
@@ -764,6 +850,15 @@ fe_stmts fe_ctx_stmts(fe_prog_ctx *c, const sr_node *const *ns, size_t nn, sr_st
 				}
 				continue;
 			}
+			{ /* the status of create_dsq, as a hash map op's (SB026) */
+				fe_stmt ds;
+				int push;
+				if (fe_scx_status_local(c, n, v, ref_var, &ds, &push)) {
+					if (push)
+						stmts_push(&out, ds);
+					continue;
+				}
+			}
 			{
 				int bad, ok;
 				fe_map_decl *m = fe_status_call(c, v, &bad, &ok);
@@ -832,6 +927,16 @@ fe_stmts fe_ctx_stmts(fe_prog_ctx *c, const sr_node *const *ns, size_t nn, sr_st
 				stmts_push(&out, s);
 		} else if (t_is(n, "MultiWriteNode")) {
 			fe_stmt s;
+			if (fe_streq(c->prog->kind, "struct_ops")) { /* only `cpu, idle = BPF::Scx.select_cpu_dfl(…)` */
+				int sok;
+				if (fe_scx_select(c, n, ref_var, &s, &sok)) {
+					if (sok)
+						stmts_push(&out, s);
+				} else {
+					fe_scx_multi_refused(c, n);
+				}
+				continue;
+			}
 			if (fe_kread_stmt(c, n, &s))
 				stmts_push(&out, s);
 		} else if (t_is(n, "LocalVariableOperatorWriteNode")) {
@@ -872,8 +977,8 @@ int fe_wide_rebind_ok(fe_prog_ctx *c, sr_str name, const sr_node *n)
 	const fe_var_info *info = fe_name_get(&c->env, name);
 	if (info && info->wide) {
 		fe_cadd(c, FE_REJECTED, FE_SB014, n,
-			"`%s` holds a u64 ctx.read value and is bound once — narrow it into a new name (`y = %s & M` or `y = %s >> K`)", name, name,
-			name);
+			"`%s` holds a u64 value and is rebound only to a u64 value — narrow it into a new name (`y = %s & M` or `y = %s >> K`)", name,
+			name, name);
 		return 0;
 	}
 	return 1;
@@ -884,6 +989,11 @@ int fe_mixed_read_ok(fe_prog_ctx *c, sr_str name, const sr_node *n)
 {
 	const fe_var_info *info = fe_name_get(&c->env, name);
 	if (info && info->mixed) {
+		if (!info->kread) {
+			fe_cadd(c, FE_REJECTED, FE_SB014, n,
+				"`%s` is a u64 value on one path and an Integer on another — bind the narrowed value to a new name on every path", name);
+			return 0;
+		}
 		fe_cadd(c, FE_REJECTED, FE_SB014, n,
 			"`%s` is a u64 ctx.read value on one path and an Integer on another — bind the narrowed value to a new name on every path", name);
 		return 0;
@@ -891,9 +1001,22 @@ int fe_mixed_read_ok(fe_prog_ctx *c, sr_str name, const sr_node *n)
 	return 1;
 }
 
+/* wideKread */
+int fe_wide_kread(fe_prog_ctx *c, const fe_expr *e)
+{
+	const fe_var_info *info = fe_name_get(&c->env, e->var);
+	return info && info->kread;
+}
+
 /* valueOK */
 int fe_value_ok(fe_prog_ctx *c, fe_expr *e, const sr_node *n)
 {
+	if (e->wide && fe_streq(e->kind, "var") && !fe_wide_kread(c, e)) { /* a u64 local of another source (rule A) */
+		fe_cadd(c, FE_REJECTED, FE_SB014, n,
+			"a u64 value %I does not fit Ruby's Integer — narrow it first (`x & M` or `x >> K`), or pass it to a u64 operand, map value or record member",
+			e->iv);
+		return 0;
+	}
 	if (e->wide && fe_streq(e->kind, "var")) {
 		fe_cadd(c, FE_REJECTED, FE_SB014, n,
 			"a u64 ctx.read value %I does not fit Ruby's Integer — narrow it first (`x & M` or `x >> K`), or pass it straight to a u64 map or record member",
@@ -933,10 +1056,6 @@ int fe_assign(fe_prog_ctx *c, const sr_node *n, sr_str name, const sr_node *v, s
 		fe_cadd(c, FE_REJECTED, FE_SB007, n, "`%s` uses the reserved prefix spinelbpf_", name);
 		return 0;
 	}
-	if (!fe_wide_rebind_ok(c, name, n)) {
-		set_flag(&c->poisoned, name, 1);
-		return 0;
-	}
 	if (!v || !fe_typed(c, n))
 		return 0;
 	fe_expr *e = fe_ctx_expr(c, v, ref_var);
@@ -944,9 +1063,17 @@ int fe_assign(fe_prog_ctx *c, const sr_node *n, sr_str name, const sr_node *v, s
 		set_flag(&c->poisoned, name, 1);
 		return 0;
 	}
-	if (!fe_value_ok(c, e, v)) {
+	if (!e->wide && !fe_wide_rebind_ok(c, name, n)) { /* rule A: a Wide name is rebound only to a Wide value (a Mixed name may be rebound to either) */
 		set_flag(&c->poisoned, name, 1);
 		return 0;
+	}
+	{
+		const fe_var_info *o = fe_name_has(&c->env, name) ? fe_name_get(&c->env, name) : NULL;
+		if (o && e->wide && !o->wide && !o->mixed && !o->bool_) {
+			fe_cadd(c, FE_REJECTED, FE_SB001, n, "`%s` changes between Integer and a u64 value", name);
+			set_flag(&c->poisoned, name, 1);
+			return 0;
+		}
 	}
 	const char *want = e->bool_ ? "bool" : "Integer";
 	sr_str got = fe_rbs(c, n);
@@ -960,7 +1087,11 @@ int fe_assign(fe_prog_ctx *c, const sr_node *n, sr_str name, const sr_node *v, s
 		fe_cadd(c, FE_REJECTED, FE_SB001, n, "`%s` changes between Integer and bool", name);
 		return 0;
 	}
-	fe_name_set(&c->env, name, var_new(e->bool_, e->iv, fe_origin(c, v)));
+	fe_var_info *vi = var_new(e->bool_, e->iv, fe_origin(c, v));
+	vi->wide = e->wide;
+	if (e->wide && fe_streq(e->kind, "var"))
+		vi->kread = fe_wide_kread(c, e);
+	fe_name_set(&c->env, name, vi);
 	fe_stmt s = stmt_new("assign");
 	s.var = name;
 	s.val = e;
@@ -1288,6 +1419,10 @@ fe_expr *fe_ctx_expr(fe_prog_ctx *c, const sr_node *n, sr_str ref_var)
 	if (t_is(n, "CallNode"))
 		return fe_call_expr(c, n, ref_var);
 	if (t_is(n, "ConstantPathNode")) {
+		int handled;
+		fe_expr *se = fe_scx_const(c, n, &handled); /* BPF::Scx::DSQ_LOCAL / SLICE_DFL */
+		if (handled)
+			return se;
 		int64_t v;
 		if (errno_const(t_const_name(a, n), &v)) {
 			fe_expr *e = fe_expr_new("lit", p);
@@ -1303,6 +1438,8 @@ fe_expr *fe_ctx_expr(fe_prog_ctx *c, const sr_node *n, sr_str ref_var)
 /* callExpr (program.go) */
 fe_expr *fe_call_expr(fe_prog_ctx *c, const sr_node *n, sr_str ref_var)
 {
+	if (fe_is_scx_call(c, n)) /* dsq_move_to_local (a Bool) and create_dsq (a status) as values */
+		return fe_scx_expr(c, n, ref_var);
 	const sr_ast *a = c->a;
 	sr_str name = t_str(n, "name");
 	fe_pos p = fe_cpos(c, n);
@@ -1469,6 +1606,8 @@ fe_expr *fe_call_expr(fe_prog_ctx *c, const sr_node *n, sr_str ref_var)
 		fe_kptr_misuse(c, n, t_str(recv, "name"));
 		return NULL;
 	}
+	if (fe_is_u64_op(name) && fe_streq(t_const_name(a, recv), "BPF"))
+		return fe_u64_op(c, n, name, as, ref_var, p);
 	if ((fe_streq(name, "pid_tgid") || fe_streq(name, "ktime_ns")) && fe_streq(t_const_name(a, recv), "BPF")) {
 		int is_pid = fe_streq(name, "pid_tgid");
 		int ok;
@@ -1621,7 +1760,7 @@ fe_expr *fe_binary(fe_prog_ctx *c, const sr_node *n, sr_str op, fe_expr *l, fe_e
 			if (!const_right(c, rn, op, r, "mask", &m))
 				return NULL;
 			if (intv_sign(m) < 0) {
-				if (fe_streq(l->kind, "var")) {
+				if (fe_streq(l->kind, "var") && fe_wide_kread(c, l)) {
 					fe_cadd(c, FE_REJECTED, FE_SB014, rn, "a u64 ctx.read value may be masked only with a non-negative literal");
 					return NULL;
 				}
@@ -1632,7 +1771,7 @@ fe_expr *fe_binary(fe_prog_ctx *c, const sr_node *n, sr_str op, fe_expr *l, fe_e
 			return e;
 		}
 		if (r->wide) {
-			if (fe_streq(r->kind, "var")) {
+			if (fe_streq(r->kind, "var") && fe_wide_kread(c, r)) {
 				fe_cadd(c, FE_REJECTED, FE_SB014, n, "write the u64 ctx.read value on the left of `&` with a literal mask (`r & M`)");
 				return NULL;
 			}
@@ -1916,7 +2055,7 @@ fe_expr *fe_ctx_value(fe_prog_ctx *c, const sr_node *n, fe_map_decl *m, sr_str r
 		return NULL;
 	}
 	if (e->wide) {
-		static const char *const wide_kinds[] = {"load", "ktime", "pidtgid", "retval", "kparg", "rawarg", "tpfield", "gload", "kfload", NULL};
+		static const char *const wide_kinds[] = {"u64op", "load", "ktime", "pidtgid", "retval", "kparg", "rawarg", "tpfield", "gload", "kfload", NULL};
 		if (m->value_bits == 64 && !m->is_signed && ((fe_streq(e->kind, "var") && e->wide) || t_in(e->kind, wide_kinds)))
 			return e;
 		fe_value_ok(c, e, n);

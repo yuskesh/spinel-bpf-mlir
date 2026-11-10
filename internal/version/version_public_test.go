@@ -15,15 +15,15 @@ import (
 // TestPublicBpfMLIRLine: the bpf-mlir line of the public form's `--version` (the go-bpf-mlir version from the build
 // information, the replace note, and no dependency).
 func TestPublicBpfMLIRLine(t *testing.T) {
-	bi := &debug.BuildInfo{Deps: []*debug.Module{{Path: "github.com/yuskesh/go-bpf-mlir", Version: "v0.20.0"}}}
+	bi := &debug.BuildInfo{Deps: []*debug.Module{{Path: "github.com/yuskesh/go-bpf-mlir", Version: "v0.21.0"}}}
 	for _, c := range []struct {
 		bi   *debug.BuildInfo
 		want string
 	}{
-		{bi, "v1.22.0 (commit 2bf11230; Go packages github.com/yuskesh/go-bpf-mlir v0.20.0, go.mod require)"},
-		{&debug.BuildInfo{Deps: []*debug.Module{{Path: "github.com/yuskesh/go-bpf-mlir", Version: "v0.20.0", Replace: &debug.Module{Path: "../g"}}}},
-			"v1.22.0 (commit 2bf11230; Go packages github.com/yuskesh/go-bpf-mlir v0.20.0, go.mod require; replaced by ../g)"},
-		{&debug.BuildInfo{Deps: []*debug.Module{{Path: "example.invalid/bpf-mlir-copy", Version: "v0.20.0"}}}, "unknown (no build information)"},
+		{bi, "v1.23.0 (commit 1a58c8d6; Go packages github.com/yuskesh/go-bpf-mlir v0.21.0, go.mod require)"},
+		{&debug.BuildInfo{Deps: []*debug.Module{{Path: "github.com/yuskesh/go-bpf-mlir", Version: "v0.21.0", Replace: &debug.Module{Path: "../g"}}}},
+			"v1.23.0 (commit 1a58c8d6; Go packages github.com/yuskesh/go-bpf-mlir v0.21.0, go.mod require; replaced by ../g)"},
+		{&debug.BuildInfo{Deps: []*debug.Module{{Path: "example.invalid/bpf-mlir-copy", Version: "v0.21.0"}}}, "unknown (no build information)"},
 		{nil, "unknown (no build information)"},
 	} {
 		if got := BpfMLIR(c.bi); got != c.want {
@@ -36,7 +36,7 @@ func TestPublicBpfMLIRLine(t *testing.T) {
 // bpf-mlir-loader release and the first digits of its source commit, the bml the public form links. An earlier second check (BML is a
 // prefix of ReleaseBMLSourceCommit) assumed one bml for both forms; the declared bml guard (toolchain TestBMLReleaseGuard) replaces it.
 func TestPublicBMLLine(t *testing.T) {
-	if got, want := bmlLine(), "v0.1.1 (commit ad2eafd)"; got != want {
+	if got, want := bmlLine(), "v0.2.0 (commit 8ad2e0b)"; got != want {
 		t.Errorf("bmlLine() = %q, want %q", got, want)
 	}
 }
@@ -71,20 +71,20 @@ func checkBMLSourceVersion(b []byte) error {
 	return nil
 }
 
-// TestPublicBMLSourceVersionCheck: the positive and negative cases of checkBMLSourceVersion (the public bml v0.1.1
+// TestPublicBMLSourceVersionCheck: the positive and negative cases of checkBMLSourceVersion (the public bml v0.2.0
 // SOURCE_VERSION, read from an anonymous clone of the public repository, and a different source_commit or version).
 func TestPublicBMLSourceVersionCheck(t *testing.T) {
-	const real = "format=1\nversion=0.1.1\nsource_commit=ad2eafdc77e610ced3d83d2b39dd3c7ae81b88bc\n"
+	const real = "format=1\nversion=0.2.0\nsource_commit=8ad2e0b05434f6bd6c47618525982fd56ca5e9f4\n"
 	if err := checkBMLSourceVersion([]byte(real)); err != nil {
-		t.Errorf("the public bml v0.1.1 SOURCE_VERSION: %v", err)
+		t.Errorf("the public bml v0.2.0 SOURCE_VERSION: %v", err)
 	}
 	for _, bad := range []string{
-		strings.Replace(real, "ad2eafdc77e6", "a77443fc77e6", 1),
-		strings.Replace(real, "version=0.1.1", "version=0.1.0", 1),
-		// the development bml 065901b, not the release source ad2eafd
-		strings.Replace(real, "ad2eafdc77e610ced3d83d2b39dd3c7ae81b88bc", "065901be3bde2e66f0dcef214be53c7f751eca2c", 1),
-		// the old public bml v0.1.0 source
-		strings.Replace(real, "ad2eafdc77e610ced3d83d2b39dd3c7ae81b88bc", "41ec56f1d3df74e8ac56aec1e74f6a51c83a6bbc", 1),
+		strings.Replace(real, "8ad2e0b05434", "a77443f05434", 1),
+		strings.Replace(real, "version=0.2.0", "version=0.1.1", 1),
+		// the previous development bml 6587986, not the release source 8ad2e0b
+		strings.Replace(real, "8ad2e0b05434f6bd6c47618525982fd56ca5e9f4", "6587986cb0ea8cdcb48b715ac73ca806d195c16e", 1),
+		// the old public bml v0.1.1 source
+		strings.Replace(real, "8ad2e0b05434f6bd6c47618525982fd56ca5e9f4", "ad2eafdc77e610ced3d83d2b39dd3c7ae81b88bc", 1),
 	} {
 		err := checkBMLSourceVersion([]byte(bad))
 		t.Logf("%q: %v", bad, err)

@@ -14,4 +14,3 @@ def prog(ctx)
   BPF::XDP_PASS
 end
 BPF.xdp :prog
-# want: SB014 11:9

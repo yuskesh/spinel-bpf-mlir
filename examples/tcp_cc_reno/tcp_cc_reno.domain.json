@@ -1,0 +1,89 @@
+{
+  "source": "tcp_cc_reno.rb",
+  "roots": [
+    {
+      "name": "reno_init",
+      "kind": "struct_ops",
+      "decl": {
+        "file": "tcp_cc_reno.rb",
+        "line": 76,
+        "col": 1
+      },
+      "def": {
+        "file": "tcp_cc_reno.rb",
+        "line": 8,
+        "col": 1
+      }
+    },
+    {
+      "name": "reno_ssthresh",
+      "kind": "struct_ops",
+      "decl": {
+        "file": "tcp_cc_reno.rb",
+        "line": 76,
+        "col": 1
+      },
+      "def": {
+        "file": "tcp_cc_reno.rb",
+        "line": 12,
+        "col": 1
+      }
+    },
+    {
+      "name": "reno_cong_avoid",
+      "kind": "struct_ops",
+      "decl": {
+        "file": "tcp_cc_reno.rb",
+        "line": 76,
+        "col": 1
+      },
+      "def": {
+        "file": "tcp_cc_reno.rb",
+        "line": 40,
+        "col": 1
+      }
+    },
+    {
+      "name": "reno_undo_cwnd",
+      "kind": "struct_ops",
+      "decl": {
+        "file": "tcp_cc_reno.rb",
+        "line": 76,
+        "col": 1
+      },
+      "def": {
+        "file": "tcp_cc_reno.rb",
+        "line": 25,
+        "col": 1
+      }
+    }
+  ],
+  "functions": [
+    {
+      "name": "reno_cong_avoid",
+      "membership": [
+        "bpf"
+      ]
+    },
+    {
+      "name": "reno_init",
+      "membership": [
+        "bpf"
+      ]
+    },
+    {
+      "name": "reno_ssthresh",
+      "membership": [
+        "bpf"
+      ]
+    },
+    {
+      "name": "reno_undo_cwnd",
+      "membership": [
+        "bpf"
+      ]
+    }
+  ],
+  "edges": [],
+  "diagnostics": []
+}

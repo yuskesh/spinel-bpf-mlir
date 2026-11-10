@@ -1,0 +1,68 @@
+{
+  "maps": [
+    {
+      "name": "Stats",
+      "kind": "percpu_array",
+      "key": "u32",
+      "value": "u64",
+      "max_entries": 2
+    },
+    {
+      "name": "SimpleOps",
+      "kind": "struct_ops",
+      "key": "u32",
+      "value": "-",
+      "max_entries": 1,
+      "struct_ops": {
+        "type": "sched_ext_ops",
+        "name": "rbsimple",
+        "ops": [
+          {
+            "member": "select_cpu",
+            "program": "simple_select_cpu"
+          },
+          {
+            "member": "enqueue",
+            "program": "simple_enqueue"
+          },
+          {
+            "member": "dispatch",
+            "program": "simple_dispatch"
+          },
+          {
+            "member": "running",
+            "program": "simple_running"
+          },
+          {
+            "member": "stopping",
+            "program": "simple_stopping"
+          },
+          {
+            "member": "enable",
+            "program": "simple_enable"
+          },
+          {
+            "member": "init",
+            "program": "simple_init"
+          },
+          {
+            "member": "exit",
+            "program": "simple_exit"
+          }
+        ]
+      }
+    }
+  ],
+  "globals": [
+    {
+      "name": "FifoSched",
+      "section": "rodata",
+      "type": "u8"
+    },
+    {
+      "name": "VtimeNow",
+      "section": "bss",
+      "type": "u64"
+    }
+  ]
+}

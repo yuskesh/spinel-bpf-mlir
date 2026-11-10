@@ -488,6 +488,14 @@ static void d_stmt(dumper *d, const char *path, const fe_stmt *s)
 	l_bool(d, cat(path, ".Buf"), s->buf);
 	d_expr(d, cat(path, ".BufLen"), s->buf_len);
 	d_field_ptr(d, cat(path, ".CountF"), s->count_f, 0);
+	const char *xp = cat(path, ".ScxArgs");
+	if (s->scx_args_nil) {
+		line(d, xp, "nil");
+	} else {
+		l_len(d, xp, s->n_scx_args);
+		for (size_t i = 0; i < s->n_scx_args; i++)
+			d_expr(d, idx(xp, i), s->scx_args[i]);
+	}
 }
 
 static void d_stmts(dumper *d, const char *path, const fe_stmts *ss)
@@ -592,6 +600,18 @@ static void d_program(dumper *d, const char *path, const fe_program *p)
 		for (size_t i = 0; i < p->n_rings; i++)
 			d_ring(d, idx(x, i), p->rings[i]);
 	}
+	l_str(d, cat(path, ".SOType"), p->so_type);
+	l_str(d, cat(path, ".SOMember"), p->so_member);
+	x = cat(path, ".SOArgs");
+	if (p->n_so_args == 0) {
+		line(d, x, "nil");
+	} else {
+		l_len(d, x, p->n_so_args);
+		for (size_t i = 0; i < p->n_so_args; i++)
+			l_int(d, idx(x, i), p->so_args[i]);
+	}
+	d_expr(d, cat(path, ".SOVal"), p->so_val);
+	l_bool(d, cat(path, ".Scx"), p->scx);
 }
 
 static void d_programs(dumper *d, const char *path, fe_program *const *v, size_t n, int is_nil)
@@ -685,6 +705,42 @@ static void d_result(dumper *d, const char *path, const fe_result *r)
 			d_ktype(d, idx(x, i), r->kernel_types[i]);
 	}
 	d_programs(d, cat(path, ".Funcs"), r->funcs, r->n_funcs, r->funcs_nil);
+	x = cat(path, ".StructOps");
+	if (r->struct_ops_nil) {
+		line(d, x, "nil");
+	} else {
+		l_len(d, x, r->n_struct_ops);
+		for (size_t i = 0; i < r->n_struct_ops; i++) {
+			const fe_struct_ops_decl *so = r->struct_ops[i];
+			const char *e = idx(x, i);
+			l_str(d, cat(e, ".Const"), so->const_name);
+			l_str(d, cat(e, ".Type"), so->type);
+			l_str(d, cat(e, ".KName"), so->kname);
+			const char *o = cat(e, ".Ops");
+			if (so->ops_nil) {
+				line(d, o, "nil");
+			} else {
+				l_len(d, o, so->n_ops);
+				for (size_t j = 0; j < so->n_ops; j++) {
+					l_str(d, cat(idx(o, j), ".Member"), so->ops[j].member);
+					l_str(d, cat(idx(o, j), ".Program"), so->ops[j].program);
+				}
+			}
+			const char *dx = cat(e, ".Data"); /* Go's map, sorted by key */
+			if (so->n_data == 0) {
+				line(d, dx, "nil");
+			} else {
+				static const char *const dk[] = {"dispatch_max_batch", "flags", "timeout_ms"};
+				l_len(d, dx, so->n_data);
+				for (int q = 0; q < 3; q++)
+					for (size_t j = 0; j < so->n_data; j++)
+						if (sr_eqc(so->data_keys[j], dk[q]))
+							l_uint(d, keyed(dx, so->data_keys[j]), so->data_vals[j]);
+			}
+			d_pos(d, cat(e, ".Pos"), so->pos);
+			l_int(d, cat(e, ".EndLine"), so->end_line);
+		}
+	}
 	x = cat(path, ".Membership");
 	if (r->membership_nil) {
 		line(d, x, "nil");

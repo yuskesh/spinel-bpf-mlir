@@ -280,9 +280,13 @@ int t_global_decl(t_ctx *c, const sr_node *n)
 		cls = "OptionalConfig";
 	else if (sr_eqc(rc, "BPF::Counter"))
 		cls = "Counter";
+	else if (sr_eqc(rc, "BPF::Global"))
+		cls = "Global";
+	else if (sr_eqc(rc, "BPF::ExitInfo"))
+		cls = "ExitInfo";
 	else
 		return 0;
-	int counter = !strcmp(cls, "Counter");
+	int counter = !strcmp(cls, "Counter"), bss = counter || !strcmp(cls, "Global");
 	sr_str cn = node_name(n);
 	fe_pos p = t_pos(c, n);
 	fe_name_set(&t->bad_globals, cn, (void *)1);
@@ -291,6 +295,29 @@ int t_global_decl(t_ctx *c, const sr_node *n)
 		return 1;
 	}
 	t_nodes as = t_args(a, v);
+	if (!strcmp(cls, "ExitInfo")) { /* the .data user_exit_info record (no type argument) */
+		if (as.n != 1 || !t_is(as.v[0], "StringNode")) {
+			t_add(z, FE_REJECTED, FE_SB029, p, "an exit info is declared as `%s = BPF::ExitInfo.new(\"%s\")` with a String literal", cn, cn);
+			return 1;
+		}
+		sr_str en = t_str(as.v[0], "content");
+		if (!sr_eq(en, cn)) {
+			t_add(z, FE_REJECTED, FE_SB029, t_pos(c, as.v[0]),
+			      "the global name %q differs from its constant %s — both sides look the global up by this name", en, cn);
+			return 1;
+		}
+		if (t_reserved_prefix(cn)) {
+			t_add(z, FE_REJECTED, FE_SB007, p, "global name %q uses the reserved prefix spinelbpf_", cn);
+			return 1;
+		}
+		fe_name_delete(&t->bad_globals, cn);
+		fe_global_decl *g = sr_alloc(sizeof *g);
+		*g = (fe_global_decl){cn, cn, t_s(cls), t_s("data"), 0, 0, 0, p};
+		fe_name_set(&t->globals, cn, g);
+		T_PUSH(t->global_order, t->n_global_order, g);
+		t->global_order_nil = 0;
+		return 1;
+	}
 	if (as.n != 2 || !t_is(as.v[0], "StringNode") || !t_is(as.v[1], "SymbolNode")) {
 		t_add(z, FE_REJECTED, FE_SB029, p,
 		      "a global is declared as `%s = BPF::%S.new(\"%s\", :u16)` with a String and a Symbol literal", cn, cls, cn);
@@ -320,7 +347,7 @@ int t_global_decl(t_ctx *c, const sr_node *n)
 	}
 	fe_name_delete(&t->bad_globals, cn);
 	fe_global_decl *g = sr_alloc(sizeof *g);
-	*g = (fe_global_decl){cn, name, t_s(cls), t_s(counter ? "bss" : "rodata"), bits, sg, !strcmp(cls, "OptionalConfig"), p};
+	*g = (fe_global_decl){cn, name, t_s(cls), t_s(bss ? "bss" : "rodata"), bits, sg, !strcmp(cls, "OptionalConfig"), p};
 	fe_name_set(&t->globals, cn, g);
 	T_PUSH(t->global_order, t->n_global_order, g);
 	t->global_order_nil = 0;

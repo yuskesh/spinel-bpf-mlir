@@ -11,6 +11,7 @@ import (
 // Each row generates a program text and analyzes it (only the code is checked; positions are checked by the negative tests
 // in testdata/neg).
 func TestBoundaries(t *testing.T) {
+	t.Parallel()
 	head := "require \"bpf\"\n\nOut = BPF::ArrayMap.new(\"Out\", :i64, 4)\nU = BPF::ArrayMap.new(\"U\", :u32, 4)\nI = BPF::ArrayMap.new(\"I\", :i32, 4)\nW = BPF::ArrayMap.new(\"W\", :u64, 4)\n\ndef prog(ctx)\n"
 	tail := "  BPF::XDP_PASS\nend\nBPF.xdp :prog\n"
 	cases := []struct {

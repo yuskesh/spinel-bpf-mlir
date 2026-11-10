@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"crypto/sha256"
+	"debug/elf"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -353,11 +354,11 @@ func runIn(dir, bin string, args ...string) error {
 
 // checkMapSymbols checks that the schema's map names match the symbols in the ELF's .maps section (layout.MapSymbols).
 func checkMapSymbols(elfPath string, schema []byte) error {
-	elf, err := os.ReadFile(elfPath)
+	elfBytes, err := os.ReadFile(elfPath)
 	if err != nil {
 		return err
 	}
-	syms, err := layout.MapSymbols(elf)
+	syms, err := layout.MapSymbols(elfBytes)
 	if err != nil {
 		return fmt.Errorf("reading the map symbols of %s: %w", elfPath, err)
 	}
@@ -365,14 +366,19 @@ func checkMapSymbols(elfPath string, schema []byte) error {
 		Core struct {
 			Maps []struct {
 				Symbol string `json:"symbol"`
+				Kind   string `json:"kind"`
 			} `json:"maps"`
 		} `json:"core"`
 	}
 	if err := strictUnmarshal(schema, &doc); err != nil {
 		return err
 	}
-	var want []string
+	var want, so []string
 	for _, m := range doc.Core.Maps {
+		if m.Kind == "struct_ops" { // bound in .struct_ops.link, checked below (the struct_ops symbol rule)
+			so = append(so, m.Symbol)
+			continue
+		}
 		want = append(want, m.Symbol)
 	}
 	sort.Strings(syms)
@@ -380,7 +386,95 @@ func checkMapSymbols(elfPath string, schema []byte) error {
 	if strings.Join(syms, ",") != strings.Join(want, ",") {
 		return fmt.Errorf("the ELF's map symbols %v differ from the schema's maps %v", syms, want)
 	}
+	return checkStructOpsSymbols(elfBytes, so)
+}
+
+// checkStructOpsSymbols is the struct_ops symbol rule: each struct_ops map of the schema is exactly one symbol of its name,
+// of any type, and it is an OBJECT in .struct_ops.link; .struct_ops.link holds no other symbol of any type.
+func checkStructOpsSymbols(b []byte, want []string) error {
+	f, err := elf.NewFile(bytes.NewReader(b))
+	if err != nil {
+		return fmt.Errorf("reading the ELF for its struct_ops symbols: %w", err)
+	}
+	syms, err := f.Symbols()
+	if err != nil {
+		return fmt.Errorf("reading the ELF symbols: %w", err)
+	}
+	// every symbol but the null one, of any type and any section
+	type sym struct{ name, typ, sec string }
+	var all []sym
+	for _, s := range syms {
+		sec := "(undefined)"
+		switch i := int(s.Section); {
+		case i >= len(f.Sections):
+			sec = "(special)"
+		case i > 0:
+			sec = f.Sections[i].Name
+		}
+		all = append(all, sym{s.Name, soSymType(elf.ST_TYPE(s.Info)), sec})
+	}
+	declared := map[string]bool{}
+	for _, w := range want {
+		declared[w] = true
+		var found []sym
+		for _, s := range all {
+			if s.name == w {
+				found = append(found, s)
+			}
+		}
+		switch {
+		case len(found) == 0:
+			return fmt.Errorf("the struct_ops map %s is absent from the ELF (want one OBJECT symbol in .struct_ops.link)", w)
+		case len(found) > 1:
+			var l []string
+			for _, s := range found {
+				l = append(l, s.typ+" in "+s.sec)
+			}
+			sort.Strings(l)
+			return fmt.Errorf("the struct_ops map %s has %d symbols (want one OBJECT symbol in .struct_ops.link): %s", w, len(found), strings.Join(l, ", "))
+		case found[0].typ != "OBJECT":
+			return fmt.Errorf("the struct_ops map %s is a %s symbol in %s (want one OBJECT symbol in .struct_ops.link)", w, found[0].typ, found[0].sec)
+		case found[0].sec != ".struct_ops.link":
+			return fmt.Errorf("the struct_ops map %s is in %s, not .struct_ops.link", w, found[0].sec)
+		}
+	}
+	var extra []string
+	for _, s := range all {
+		if s.sec != ".struct_ops.link" || declared[s.name] {
+			continue
+		}
+		if s.name == "" {
+			extra = append(extra, "an unnamed "+s.typ+" symbol")
+		} else {
+			extra = append(extra, s.name)
+		}
+	}
+	sort.Strings(extra)
+	if len(extra) > 0 {
+		return fmt.Errorf(".struct_ops.link holds %s, which is not a struct_ops map of the schema", extra[0])
+	}
 	return nil
+}
+
+// soSymType names an ELF symbol type as the struct_ops check prints it (the C driver's so_sym_type).
+func soSymType(t elf.SymType) string {
+	switch t {
+	case elf.STT_OBJECT:
+		return "OBJECT"
+	case elf.STT_FUNC:
+		return "FUNC"
+	case elf.STT_NOTYPE:
+		return "NOTYPE"
+	case elf.STT_SECTION:
+		return "SECTION"
+	case elf.STT_FILE:
+		return "FILE"
+	case elf.STT_COMMON:
+		return "COMMON"
+	case elf.STT_TLS:
+		return "TLS"
+	}
+	return fmt.Sprintf("type %d", int(t))
 }
 
 // checkRecordsTable checks that the embedded layout table matches the schema's records and the maps' record_ref, so a
@@ -478,6 +572,9 @@ func checkRecordsTable(schema []byte, table string) error {
 	// 0 / 1 (1 only for .rodata)
 	wantG := map[string]string{}
 	for _, g := range doc.Core.Globals {
+		if g.Section == "data" { // a .data record global (BPF::ExitInfo) has no G row
+			continue
+		}
 		t := "u"
 		if g.Type.Signed {
 			t = "i"

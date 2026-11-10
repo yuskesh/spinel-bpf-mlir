@@ -112,7 +112,7 @@ fe_expr *fe_field_value(fe_prog_ctx *c, const sr_node *n, fe_record_field *f, fe
 		return NULL;
 	}
 	if (e->wide) {
-		static const char *const ok_kinds[] = {"load", "fload", "ktime", "pidtgid", "retval", "kparg", "rawarg", "tpfield", "gload", "kfload"};
+		static const char *const ok_kinds[] = {"u64op", "load", "fload", "ktime", "pidtgid", "retval", "kparg", "rawarg", "tpfield", "gload", "kfload"};
 		int pass = 0;
 		if (f->bits == 64 && !f->is_signed) {
 			if (sr_eqc(e->kind, "var") && e->wide) pass = 1;

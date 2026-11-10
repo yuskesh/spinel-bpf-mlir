@@ -42,7 +42,7 @@ import (
 
 // SpinelCommit is the pinned Spinel commit (upstream matz/spinel). When raising the version, move this value and the
 // submodule to the same commit.
-const SpinelCommit = "086d514d"
+const SpinelCommit = "0d58c397"
 
 // Verified holds the checked values (written into the artefacts' provenance record).
 type Verified struct {

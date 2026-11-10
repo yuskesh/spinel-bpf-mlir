@@ -699,7 +699,7 @@ func (c *progCtx) fieldValue(n *Node, f *RecordField, m *MapDecl, refVar string)
 		return nil
 	}
 	if e.Wide {
-		if f.Bits == 64 && !f.Signed && ((e.Kind == "var" && e.Wide) || e.Kind == "load" || e.Kind == "fload" || e.Kind == "ktime" || e.Kind == "pidtgid" || e.Kind == "retval" || e.Kind == "kparg" || e.Kind == "rawarg" || e.Kind == "tpfield" || e.Kind == "gload" || e.Kind == "kfload") {
+		if f.Bits == 64 && !f.Signed && ((e.Kind == "var" && e.Wide) || e.Kind == "u64op" || e.Kind == "load" || e.Kind == "fload" || e.Kind == "ktime" || e.Kind == "pidtgid" || e.Kind == "retval" || e.Kind == "kparg" || e.Kind == "rawarg" || e.Kind == "tpfield" || e.Kind == "gload" || e.Kind == "kfload") {
 			return e
 		}
 		c.valueOK(e, n)

@@ -173,6 +173,11 @@ int fe_map_call(fe_prog_ctx *c, const sr_node *n, sr_str ref_var, fe_stmt *out)
 	if (recv && t_is(recv, "ConstantReadNode")) {
 		fe_global_decl *g = fe_name_get(&c->z->top->globals, t_str(recv, "name"));
 		if (g) {
+			int handled;
+			t_nodes gas = t_args(a, n);
+			int gok = fe_global_stmt(c, n, g, gas.v, gas.n, ref_var, out, &handled); /* a Global's set / an ExitInfo */
+			if (handled)
+				return gok;
 			if (fe_streq(name, "add")) {
 				t_nodes as = t_args(a, n);
 				return fe_global_add(c, n, g, as.v, as.n, ref_var, out);
@@ -1070,6 +1075,64 @@ fe_expr *fe_tracing_read(fe_prog_ctx *c, const sr_node *n, sr_str name, const sr
 		if (fe_streq(kp->type, "ptr"))
 			return mk("kparg", named_field("ptr", 64, 1), kp->n, p);
 		return mk("kparg", typ(kp->type), kp->n, p);
+	}
+	if (K("struct_ops") && (N("kptr") || N("kptr_or_null"))) { /* the socket-argument rule: the socket only as `tp = ctx.kptr_or_null(i, T)` + `if tp` */
+		fe_struct_ops_kptr_refused(c, n);
+		return NULL;
+	}
+	if (K("struct_ops") && N("arg")) { /* a struct_ops member's integer argument (the member table decides its type) */
+		if (!fe_streq(callee, "StructOpsCtx#arg")) {
+			fe_cadd(c, FE_REJECTED, FE_SB011, n, "`%s.arg` resolves to %q, not BPF::StructOpsCtx#arg", prm, callee);
+			return NULL;
+		}
+		if (n_as != 1 || !t_is(as[0], "IntegerNode")) {
+			fe_cadd(c, FE_REJECTED, FE_SB033, n, "`%s.arg(i)` takes one Integer literal i — an argument index of the member", prm);
+			return NULL;
+		}
+		bigint *nb = sr_alloc(sizeof *nb);
+		if (!fe_literal(c->z->z, c->a, as[0], nb))
+			return NULL;
+		int64_t v;
+		if (!big_i64(c, nb, &v))
+			return NULL;
+		const fe_so_member *m = fe_so_member_of(c->prog->so_type, c->prog->so_member);
+		if (!m)
+			return NULL;
+		if (v < 0 || v >= m->nargs) {
+			fe_cadd(c, FE_REJECTED, FE_SB033, as[0], "%s.%S has %d arguments — `%s.arg(%d)` is outside them", c->prog->so_type, m->name, m->nargs,
+				prm, v);
+			return NULL;
+		}
+		const fe_so_arg *ar = &m->args[v];
+		if (!strcmp(ar->kind, "sock")) {
+			fe_cadd(c, FE_REJECTED, FE_SB033, n,
+				"argument %d of %s.%S is the socket pointer (struct sock *, read as tcp_sock) — it is not an integer; bind it with `tp = %s.kptr_or_null(%d, T)`",
+				v, c->prog->so_type, m->name, prm, v);
+			return NULL;
+		}
+		if (!strcmp(ar->kind, "task")) {
+			fe_cadd(c, FE_REJECTED, FE_SB033, n,
+				"argument %d of %s.%S is the task pointer (struct task_struct *) — it is not an integer; bind it with `p = %s.kptr_or_null(%d, T)`",
+				v, c->prog->so_type, m->name, prm, v);
+			return NULL;
+		}
+		if (!strcmp(ar->kind, "exitinfo")) {
+			fe_cadd(c, FE_REJECTED, FE_SB033, n,
+				"argument %d of %s.%S is the exit info (struct scx_exit_info *) — it is read only by `BPF::Scx.exit_info(%s, U)`", v,
+				c->prog->so_type, m->name, prm);
+			return NULL;
+		}
+		if (!strcmp(ar->kind, "bool")) {
+			fe_cadd(c, FE_REJECTED, FE_SB033, n, "argument %d of %s.%S is a bool, which this version does not read", v, c->prog->so_type,
+				m->name);
+			return NULL;
+		}
+		if (!strcmp(ar->kind, "ptr")) {
+			fe_cadd(c, FE_REJECTED, FE_SB033, n, "argument %d of %s.%S is a pointer this version does not read", v, c->prog->so_type, m->name);
+			return NULL;
+		}
+		fe_so_add_index(c->prog, v); /* soAddIndex: ascending, once each */
+		return mk("kparg", typ(t_s(ar->type)), v, p);
 	}
 	if ((K("tp_btf") || K("fentry") || K("fmod_ret")) && N("arg")) {
 		const char *want = K("tp_btf") ? "TpBtfCtx#arg" : K("fentry") ? "FentryCtx#arg" : "FmodRetCtx#arg";

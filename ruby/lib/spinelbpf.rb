@@ -58,6 +58,11 @@ module SpinelBPFC
       return bml_attach_kprobe(obj, prog, n);
     }
     long spinelbpf_run_tracing(long obj, const char *prog, long n) { return bml_test_run_tracing(obj, prog, (long)strlen(prog), n); }
+    /* struct_ops: bml's checked registration entry. Declared weak, so that a program that never registers still links
+       against a bml without it (the public bml v0.1.1); the library checks spinelbpf_has_struct_ops before any call */
+    long bml_attach_struct_ops(long obj, const char *map, long map_len) __attribute__((weak));
+    long spinelbpf_has_struct_ops(void) { return bml_attach_struct_ops ? 1 : 0; }
+    long spinelbpf_attach_struct_ops(long obj, const char *map) { return bml_attach_struct_ops(obj, map, (long)strlen(map)); }
     /* sk_lookup test run: struct bpf_sk_lookup (the 7.1.8 UAPI — 68 bytes, 72 with padding) — family AF_INET, protocol, remote 127.0.0.1:40000,
        local 127.0.0.1:port (local_port in host order). Returns the program's return value; the selected socket's cookie that the kernel wrote to ctx_out (0 if none) is read with sk_lookup_cookie */
     static unsigned long long spinelbpf_skl_cookie = 0;
@@ -212,6 +217,8 @@ module SpinelBPFC
   ffi_func :spinelbpf_load_checked, [:ptr, :long, :str, :str, :long], :long
   ffi_func :spinelbpf_attach_xdp, [:long, :str, :str], :long
   ffi_func :spinelbpf_detach, [:long], :long
+  ffi_func :spinelbpf_has_struct_ops, [], :long
+  ffi_func :spinelbpf_attach_struct_ops, [:long, :str], :long
   ffi_func :spinelbpf_map_get, [:long, :str, :long], :long
   ffi_func :spinelbpf_map_put, [:long, :str, :long, :long], :long
   ffi_func :spinelbpf_map_get_bytes, [:long, :str, :long, :int_array, :long], :long
@@ -287,6 +294,22 @@ module SpinelBPF
     end
     msg = SpinelBPFC.spinelbpf_result_message(r)
     SpinelBPFC.spinelbpf_result_free(r)
+    raise_kind(kind, msg)
+    0
+  end
+
+  # kind_name is the exception class name of result kind `kind` (raise_kind's mapping), for messages that list several failures.
+  def self.kind_name(kind)
+    names = ["", "SchemaMismatch", "PrecheckFailed", "TargetRejected", "VerifierRejected", "Other", "State", "RuntimeConflict",
+             "MapMismatch", "ValueRange", "ConfigNotSet", "NotFound"]
+    if kind >= 1 && kind < names.length
+      return names[kind]
+    end
+    "Other"
+  end
+
+  # raise_kind raises the exception of result kind `kind` with message msg (a kind without its own class is Other).
+  def self.raise_kind(kind, msg)
     if kind == 1
       raise SchemaMismatch, msg
     elsif kind == 2
@@ -700,7 +723,7 @@ def self.record_put_values(h, map, key, vals)
   size = lay[0]
   members = lay[1]
   if vals.length != members.length
-    raise ValueRange, "spinelbpf: #{map.name}[#{key}]: #{vals.length} values, the layout has #{members.length} (array members count element by element)"
+    raise ValueRange, "spinelbpf: #{map.name}[#{key}]: #{vals.length} values, the layout has #{members.length} (array members are taken element by element)"
   end
   buf = Array.new(size, 0)
   i = 0
@@ -1070,10 +1093,27 @@ end
   class Loaded
     def initialize(h)
       @h = h
+      @so_names = [] # the struct_ops tables this object registered, in order, and their link handles (close detaches them)
+      @so_links = []
     end
 
     def handle
       @h
+    end
+
+    # register_struct_ops registers the struct_ops table `name` (a .struct_ops.link table) and returns its Link. Loading
+    # never registers. Link#detach unregisters it, and close detaches every table this object registered before it closes.
+    # Errors: State (a closed object, or the table is already registered), TargetRejected (no such table, or not a link table),
+    # RuntimeConflict (the kernel refused, e.g. a TCP congestion control name in use or another sched_ext scheduler), and Other
+    # when the linked bml has no struct_ops entry.
+    def register_struct_ops(name)
+      if SpinelBPFC.spinelbpf_has_struct_ops == 0
+        raise Other, "spinelbpf: this bml build has no struct_ops entry (bml_attach_struct_ops); register_struct_ops needs bml 6587986 or later"
+      end
+      h = SpinelBPF.check(SpinelBPFC.spinelbpf_attach_struct_ops(@h, name))
+      @so_names.push(name)
+      @so_links.push(h)
+      Link.new(h)
     end
 
     def attach_xdp(prog, ifname)
@@ -1648,8 +1688,52 @@ end
       RingReader.new(SpinelBPF.check(SpinelBPFC.spinelbpf_ringbuf_open(@h, ring.name)), ring)
     end
 
+    # close detaches every struct_ops table this object registered (in registration order, including ones already detached —
+    # bml's detach is idempotent), forgets them, and then closes the object whatever the detaches gave (bml refuses to close an
+    # object with a registered table). Every failure is reported: one is raised as itself; several are raised as the first one's
+    # class, with all of them in the message.
     def close
-      SpinelBPF.check(SpinelBPFC.spinelbpf_close(@h))
+      kinds = []
+      msgs = []
+      i = 0
+      while i < @so_links.length
+        r = SpinelBPFC.spinelbpf_detach(@so_links[i])
+        k = SpinelBPFC.spinelbpf_result_kind(r)
+        if k != SpinelBPF::OK
+          kinds.push(k)
+          msgs.push("detach #{@so_names[i]}: #{SpinelBPFC.spinelbpf_result_message(r)}")
+        end
+        SpinelBPFC.spinelbpf_result_free(r)
+        i += 1
+      end
+      @so_names = []
+      @so_links = []
+      r = SpinelBPFC.spinelbpf_close(@h)
+      k = SpinelBPFC.spinelbpf_result_kind(r)
+      value = SpinelBPFC.spinelbpf_result_value(r)
+      if k != SpinelBPF::OK
+        kinds.push(k)
+        msgs.push(SpinelBPFC.spinelbpf_result_message(r))
+      end
+      SpinelBPFC.spinelbpf_result_free(r)
+      if kinds.length == 0
+        return value
+      end
+      if kinds.length == 1
+        SpinelBPF.raise_kind(kinds[0], msgs[0])
+      end
+      parts = []
+      j = 0
+      while j < kinds.length
+        text = msgs[j]
+        if j == kinds.length - 1 && k != SpinelBPF::OK
+          text = "close: #{text}"
+        end
+        parts.push("[#{SpinelBPF.kind_name(kinds[j])}] #{text}")
+        j += 1
+      end
+      SpinelBPF.raise_kind(kinds[0], "close: #{kinds.length} errors: #{parts.join("; ")}")
+      0
     end
   end
 end

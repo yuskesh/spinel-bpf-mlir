@@ -284,8 +284,8 @@ static sr_result type_field(mctx *m, sr_type_rec *r, int f, const jv *v)
 	case 0: return set_str(m, v, &r->file);
 	case 1: return set_int(m, v, &r->line);
 	case 2: return set_int(m, v, &r->col);
-	case 3: return set_int(m, v, &r->end_line);
-	case 4: return set_int(m, v, &r->end_col);
+	case 3: r->has_end = 1; return set_int(m, v, &r->end_line);
+	case 4: r->has_end = 1; return set_int(m, v, &r->end_col);
 	case 5: return set_str(m, v, &r->kind);
 	case 6: return set_str(m, v, &r->name);
 	case 7: return set_str(m, v, &r->type);
@@ -544,7 +544,7 @@ long sr_codegen_of(const sr_types *t, const sr_ast *a, const sr_node *n, size_t 
 
 /* ---- ParseTypes ---- */
 
-sr_result sr_parse_types(sr_str data, sr_types **out)
+static sr_result decode_types(sr_str data, int candidates, sr_types **out, size_t **cand, size_t *n_cand)
 {
 	struct bml_build_error be = {0};
 	int rc = bml_build_json_check_any(data.p, data.n, &be);
@@ -567,12 +567,172 @@ sr_result sr_parse_types(sr_str data, sr_types **out)
 	sr_result e = unmarshal(root, t);
 	if (e.kind)
 		return e;
+	/* types.go decodeTypes: with candidates, a row with neither end key (and a file and a kind) is a candidate; every other row is
+	 * checked as without candidates */
+	size_t *c = sr_alloc((t->n_types ? t->n_types : 1) * sizeof *c), nc = 0;
 	for (size_t i = 0; i < t->n_types; i++) {
 		sr_type_rec *r = &t->types[i];
-		if (r->file.n == 0 || r->kind.n == 0 || r->end_line == 0)
+		if (r->file.n == 0 || r->kind.n == 0 || r->end_line == 0) {
+			if (candidates && !r->has_end && r->file.n != 0 && r->kind.n != 0) {
+				c[nc++] = i;
+				continue;
+			}
 			return sr_err("spinel --emit-types JSON: type record %zu has no file / kind / end", i);
+		}
+	}
+	*out = t;
+	*cand = c;
+	*n_cand = nc;
+	return sr_ok;
+}
+
+sr_result sr_parse_types(sr_str data, sr_types **out)
+{
+	sr_types *t;
+	size_t *c, nc;
+	sr_result e = decode_types(data, 0, &t, &c, &nc);
+	if (e.kind)
+		return e;
+	sr_reindex_types(t);
+	*out = t;
+	return sr_ok;
+}
+
+/* ---- A block parameter's rename (types.go renameRefusal) ---- */
+
+static const sr_str *node_str(const sr_node *n, const char *k)
+{
+	for (size_t i = 0; i < n->n_str; i++)
+		if (sr_eqc(n->str[i].k, k))
+			return &n->str[i].v;
+	return NULL;
+}
+
+/* the parent of child, when it has type want and holds child in field (an array field when arr) */
+static const sr_node *parent_in(const sr_ast *a, const sr_node *child, const char *want, const char *field, int arr)
+{
+	int64_t *pid = sr_imap_get(&a->parent, child->id);
+	if (!pid)
+		return NULL;
+	const sr_node *p = sr_imap_get(&a->nodes, *pid);
+	if (!p || !sr_eqc(p->type, want))
+		return NULL;
+	if (arr) {
+		for (size_t i = 0; i < p->n_arr; i++)
+			if (sr_eqc(p->arr[i].k, field))
+				for (size_t j = 0; j < p->arr[i].n; j++)
+					if (p->arr[i].ids[j] == child->id)
+						return p;
+		return NULL;
+	}
+	for (size_t i = 0; i < p->n_ref; i++)
+		if (sr_eqc(p->ref[i].k, field))
+			return p->ref[i].v == child->id ? p : NULL;
+	return NULL;
+}
+
+static int is_block_param(const sr_ast *a, const sr_node *n)
+{
+	const sr_node *q = parent_in(a, n, "ParametersNode", "requireds", 1);
+	const sr_node *bp = q ? parent_in(a, q, "BlockParametersNode", "parameters", 0) : NULL;
+	return bp && parent_in(a, bp, "BlockNode", "parameters", 0) != NULL;
+}
+
+/* ^([a-z_][A-Za-z0-9_]*)__bp(?:in|[0-9]+)$ : 1 and *base on a match */
+static int rename_base(sr_str name, sr_str *base)
+{
+	if (name.n < 5)
+		return 0;
+	size_t at = (size_t)-1;
+	for (size_t i = 0; i + 4 <= name.n; i++)
+		if (memcmp(name.p + i, "__bp", 4) == 0)
+			at = i;
+	if (at == (size_t)-1 || at == 0)
+		return 0;
+	sr_str suf = {name.p + at + 4, name.n - at - 4};
+	int ok = sr_eqc(suf, "in");
+	if (!ok && suf.n > 0) {
+		ok = 1;
+		for (size_t i = 0; i < suf.n; i++)
+			if (suf.p[i] < '0' || suf.p[i] > '9')
+				ok = 0;
+	}
+	if (!ok)
+		return 0;
+	char c0 = name.p[0];
+	if (!((c0 >= 'a' && c0 <= 'z') || c0 == '_'))
+		return 0;
+	for (size_t i = 1; i < at; i++) {
+		char c = name.p[i];
+		if (!((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '_'))
+			return 0;
+	}
+	*base = (sr_str){name.p, at};
+	return 1;
+}
+
+static const char *rename_refusal(const sr_ast *a, const sr_type_rec *r)
+{
+	if (!a)
+		return "no AST";
+	if (!sr_eqc(r->kind, "LocalVariableWriteNode") && !sr_eqc(r->kind, "LocalVariableReadNode"))
+		return "the kind";
+	sr_str base;
+	if (!rename_base(r->name, &base))
+		return "the name has no rename form";
+	int64_t *ids = sr_imap_sorted_keys(&a->nodes);
+	const sr_node *hit = NULL;
+	size_t count = 0;
+	for (size_t i = 0; i < a->nodes.n; i++) {
+		const sr_node *n = sr_imap_get(&a->nodes, ids[i]);
+		if (sr_eqc(n->type, "RequiredParameterNode") && sr_eq(sr_ast_file(a, n), r->file) && n->line == r->line &&
+		    n->col == r->col && is_block_param(a, n)) {
+			hit = n;
+			count++;
+		}
+	}
+	if (count == 0)
+		return "no block parameter at its position";
+	if (count > 1)
+		return "two or more block parameters at its position";
+	const sr_str *nm = node_str(hit, "name");
+	if (!nm || !sr_eq(*nm, base))
+		return "the base is not the parameter's name";
+	return NULL;
+}
+
+sr_result sr_parse_types_ast(sr_str data, const sr_ast *a, sr_types **out, sr_type_rec **sel, size_t *n_sel)
+{
+	sr_types *t;
+	size_t *c, nc;
+	sr_result e = decode_types(data, 1, &t, &c, &nc);
+	if (e.kind)
+		return e;
+	sr_type_rec *s = sr_alloc((nc ? nc : 1) * sizeof *s);
+	for (size_t k = 0; k < nc; k++) {
+		sr_type_rec *r = &t->types[c[k]];
+		const char *why = rename_refusal(a, r);
+		if (why)
+			return sr_err("spinel --emit-types JSON: type record %zu has no file / kind / end (%.*s %.*s at %.*s:%lld:%lld is not a "
+				      "block parameter's rename: %s)",
+				      c[k], (int)r->kind.n, r->kind.p, (int)r->name.n, r->name.p, (int)r->file.n, r->file.p,
+				      (long long)r->line, (long long)r->col, why);
+		s[k] = *r;
+	}
+	if (nc > 0) {
+		size_t w = 0, k = 0;
+		for (size_t i = 0; i < t->n_types; i++) {
+			if (k < nc && c[k] == i) {
+				k++;
+				continue;
+			}
+			t->types[w++] = t->types[i];
+		}
+		t->n_types = w;
 	}
 	sr_reindex_types(t);
 	*out = t;
+	*sel = s;
+	*n_sel = nc;
 	return sr_ok;
 }
