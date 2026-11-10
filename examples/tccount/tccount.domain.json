@@ -1,0 +1,152 @@
+{
+  "source": "tccount.rb",
+  "roots": [
+    {
+      "name": "tcc_xdp",
+      "kind": "xdp",
+      "decl": {
+        "file": "tccount.rb",
+        "line": 95,
+        "col": 1
+      },
+      "def": {
+        "file": "tccount.rb",
+        "line": 9,
+        "col": 1
+      }
+    },
+    {
+      "name": "tcc_in",
+      "kind": "sched_cls",
+      "decl": {
+        "file": "tccount.rb",
+        "line": 96,
+        "col": 1
+      },
+      "def": {
+        "file": "tccount.rb",
+        "line": 38,
+        "col": 1
+      }
+    },
+    {
+      "name": "tcc_out",
+      "kind": "sched_cls",
+      "decl": {
+        "file": "tccount.rb",
+        "line": 97,
+        "col": 1
+      },
+      "def": {
+        "file": "tccount.rb",
+        "line": 67,
+        "col": 1
+      }
+    }
+  ],
+  "functions": [
+    {
+      "name": "frame",
+      "membership": [
+        "user"
+      ]
+    },
+    {
+      "name": "show",
+      "membership": [
+        "user"
+      ]
+    },
+    {
+      "name": "tcc_in",
+      "membership": [
+        "bpf"
+      ]
+    },
+    {
+      "name": "tcc_out",
+      "membership": [
+        "bpf"
+      ]
+    },
+    {
+      "name": "tcc_xdp",
+      "membership": [
+        "bpf"
+      ]
+    }
+  ],
+  "edges": [
+    {
+      "from": "\u003ctop\u003e",
+      "to": "frame",
+      "pos": {
+        "file": "tccount.rb",
+        "line": 160,
+        "col": 13
+      },
+      "dispatch": "direct"
+    },
+    {
+      "from": "\u003ctop\u003e",
+      "to": "frame",
+      "pos": {
+        "file": "tccount.rb",
+        "line": 160,
+        "col": 35
+      },
+      "dispatch": "direct"
+    },
+    {
+      "from": "\u003ctop\u003e",
+      "to": "frame",
+      "pos": {
+        "file": "tccount.rb",
+        "line": 160,
+        "col": 56
+      },
+      "dispatch": "direct"
+    },
+    {
+      "from": "\u003ctop\u003e",
+      "to": "frame",
+      "pos": {
+        "file": "tccount.rb",
+        "line": 160,
+        "col": 77
+      },
+      "dispatch": "direct"
+    },
+    {
+      "from": "\u003ctop\u003e",
+      "to": "frame",
+      "pos": {
+        "file": "tccount.rb",
+        "line": 160,
+        "col": 98
+      },
+      "dispatch": "direct"
+    },
+    {
+      "from": "\u003ctop\u003e",
+      "to": "show",
+      "pos": {
+        "file": "tccount.rb",
+        "line": 171,
+        "col": 3
+      },
+      "dispatch": "direct"
+    },
+    {
+      "from": "\u003ctop\u003e",
+      "to": "show",
+      "pos": {
+        "file": "tccount.rb",
+        "line": 196,
+        "col": 3
+      },
+      "dispatch": "direct"
+    }
+  ],
+  "diagnostics": []
+}

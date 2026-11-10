@@ -1,0 +1,102 @@
+{
+  "source": "tlvwalk.rb",
+  "roots": [
+    {
+      "name": "tlv",
+      "kind": "xdp",
+      "decl": {
+        "file": "tlvwalk.rb",
+        "line": 30,
+        "col": 1
+      },
+      "def": {
+        "file": "tlvwalk.rb",
+        "line": 8,
+        "col": 1
+      }
+    }
+  ],
+  "functions": [
+    {
+      "name": "packet",
+      "membership": [
+        "user"
+      ]
+    },
+    {
+      "name": "show",
+      "membership": [
+        "user"
+      ]
+    },
+    {
+      "name": "tlv",
+      "membership": [
+        "bpf"
+      ]
+    }
+  ],
+  "edges": [
+    {
+      "from": "\u003ctop\u003e",
+      "to": "packet",
+      "pos": {
+        "file": "tlvwalk.rb",
+        "line": 66,
+        "col": 5
+      },
+      "dispatch": "direct"
+    },
+    {
+      "from": "\u003ctop\u003e",
+      "to": "packet",
+      "pos": {
+        "file": "tlvwalk.rb",
+        "line": 67,
+        "col": 5
+      },
+      "dispatch": "direct"
+    },
+    {
+      "from": "\u003ctop\u003e",
+      "to": "packet",
+      "pos": {
+        "file": "tlvwalk.rb",
+        "line": 68,
+        "col": 5
+      },
+      "dispatch": "direct"
+    },
+    {
+      "from": "\u003ctop\u003e",
+      "to": "packet",
+      "pos": {
+        "file": "tlvwalk.rb",
+        "line": 69,
+        "col": 5
+      },
+      "dispatch": "direct"
+    },
+    {
+      "from": "\u003ctop\u003e",
+      "to": "show",
+      "pos": {
+        "file": "tlvwalk.rb",
+        "line": 77,
+        "col": 8
+      },
+      "dispatch": "direct"
+    },
+    {
+      "from": "\u003ctop\u003e",
+      "to": "show",
+      "pos": {
+        "file": "tlvwalk.rb",
+        "line": 87,
+        "col": 3
+      },
+      "dispatch": "direct"
+    }
+  ],
+  "diagnostics": []
+}

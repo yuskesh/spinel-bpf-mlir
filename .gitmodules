@@ -1,0 +1,9 @@
+[submodule "third_party/bpf-mlir"]
+	path = third_party/bpf-mlir
+	url = https://github.com/yuskesh/bpf-mlir
+[submodule "third_party/spinel"]
+	path = third_party/spinel
+	url = https://github.com/matz/spinel.git
+[submodule "third_party/bpf-mlir-loader"]
+	path = third_party/bpf-mlir-loader
+	url = https://github.com/yuskesh/bpf-mlir-loader

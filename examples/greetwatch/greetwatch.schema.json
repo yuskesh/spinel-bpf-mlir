@@ -1,0 +1,150 @@
+{
+  "version": 1,
+  "coverage": {
+    "programs": "complete",
+    "maps": "complete",
+    "records": "complete",
+    "telemetry": "complete"
+  },
+  "core": {
+    "records": [
+      {
+        "symbol": "Greeting",
+        "id": 0,
+        "size": 56,
+        "min_size": 56,
+        "alignment": 8,
+        "required_through": "",
+        "note": "Ruby Struct Greeting",
+        "fields": [
+          {
+            "name": "pid_tgid",
+            "offset": 0,
+            "expose": "int",
+            "note": "",
+            "type": {
+              "kind": "int",
+              "bits": 64,
+              "signed": false,
+              "endianness": "little",
+              "alignment": 8
+            }
+          },
+          {
+            "name": "count",
+            "offset": 8,
+            "expose": "int",
+            "note": "",
+            "type": {
+              "kind": "int",
+              "bits": 32,
+              "signed": false,
+              "endianness": "little",
+              "alignment": 4
+            }
+          },
+          {
+            "name": "status",
+            "offset": 16,
+            "expose": "int",
+            "note": "",
+            "type": {
+              "kind": "int",
+              "bits": 64,
+              "signed": true,
+              "endianness": "little",
+              "alignment": 8
+            }
+          },
+          {
+            "name": "name",
+            "offset": 24,
+            "expose": "int",
+            "note": "",
+            "type": {
+              "kind": "array",
+              "count": 32,
+              "element": {
+                "kind": "int",
+                "bits": 8,
+                "signed": false,
+                "endianness": "little",
+                "alignment": 1
+              }
+            }
+          }
+        ]
+      }
+    ],
+    "maps": [
+      {
+        "symbol": "Stats",
+        "kind": "array",
+        "key": {
+          "kind": "int",
+          "bits": 32,
+          "signed": false,
+          "endianness": "little",
+          "alignment": 4
+        },
+        "value": {
+          "kind": "int",
+          "bits": 64,
+          "signed": false,
+          "endianness": "little",
+          "alignment": 8
+        },
+        "max_entries": 2,
+        "flags": 0,
+        "record": "",
+        "note": "Ruby constant Stats"
+      },
+      {
+        "symbol": "Greetings",
+        "kind": "ringbuf",
+        "max_entries": 65536,
+        "flags": 0,
+        "record": "Greeting",
+        "note": "Ruby constant Greetings"
+      }
+    ],
+    "programs": [
+      {
+        "name": "on_greet",
+        "kind": "uprobe",
+        "attach_target": "greet",
+        "maps": [
+          "Stats"
+        ],
+        "arch": "x86_64",
+        "params": [
+          {
+            "n": 1,
+            "type": {
+              "kind": "user_str"
+            }
+          },
+          {
+            "n": 2,
+            "type": {
+              "kind": "int",
+              "bits": 32,
+              "signed": false,
+              "endianness": "little",
+              "alignment": 4
+            }
+          }
+        ],
+        "binary_sha256": "6aafa61fee1e5cd3657e7f1e14593923a8fe6c3ebf5658f9749a28d830111d30",
+        "note": "Ruby def on_greet"
+      }
+    ]
+  },
+  "telemetry": {
+    "clocks": [],
+    "value_maps": [],
+    "bounds_sets": [],
+    "signals": []
+  },
+  "extensions": {}
+}

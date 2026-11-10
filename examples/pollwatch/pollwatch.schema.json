@@ -1,0 +1,135 @@
+{
+  "version": 1,
+  "coverage": {
+    "programs": "complete",
+    "maps": "complete",
+    "records": "complete",
+    "telemetry": "complete"
+  },
+  "core": {
+    "records": [],
+    "maps": [
+      {
+        "symbol": "Polls",
+        "kind": "hash",
+        "key": {
+          "kind": "int",
+          "bits": 32,
+          "signed": false,
+          "endianness": "little",
+          "alignment": 4
+        },
+        "value": {
+          "kind": "int",
+          "bits": 64,
+          "signed": false,
+          "endianness": "little",
+          "alignment": 8
+        },
+        "max_entries": 1024,
+        "flags": 0,
+        "record": "",
+        "note": "Ruby constant Polls"
+      },
+      {
+        "symbol": "Nfds",
+        "kind": "hash",
+        "key": {
+          "kind": "int",
+          "bits": 32,
+          "signed": false,
+          "endianness": "little",
+          "alignment": 4
+        },
+        "value": {
+          "kind": "int",
+          "bits": 64,
+          "signed": false,
+          "endianness": "little",
+          "alignment": 8
+        },
+        "max_entries": 1024,
+        "flags": 0,
+        "record": "",
+        "note": "Ruby constant Nfds"
+      },
+      {
+        "symbol": "Tests",
+        "kind": "array",
+        "key": {
+          "kind": "int",
+          "bits": 32,
+          "signed": false,
+          "endianness": "little",
+          "alignment": 4
+        },
+        "value": {
+          "kind": "int",
+          "bits": 64,
+          "signed": false,
+          "endianness": "little",
+          "alignment": 8
+        },
+        "max_entries": 1,
+        "flags": 0,
+        "record": "",
+        "note": "Ruby constant Tests"
+      }
+    ],
+    "programs": [
+      {
+        "name": "on_poll",
+        "kind": "kprobe",
+        "attach_target": "do_sys_poll",
+        "maps": [
+          "Polls",
+          "Nfds"
+        ],
+        "arch": "x86_64",
+        "params": [
+          {
+            "n": 2,
+            "type": {
+              "kind": "int",
+              "bits": 32,
+              "signed": false,
+              "endianness": "little",
+              "alignment": 4
+            }
+          }
+        ],
+        "note": "Ruby def on_poll"
+      },
+      {
+        "name": "on_test",
+        "kind": "fentry",
+        "attach_target": "bpf_fentry_test1",
+        "maps": [
+          "Tests"
+        ],
+        "note": "Ruby def on_test"
+      }
+    ],
+    "globals": [
+      {
+        "name": "Filter",
+        "section": "rodata",
+        "type": {
+          "kind": "int",
+          "bits": 32,
+          "signed": false,
+          "endianness": "little",
+          "alignment": 4
+        },
+        "note": "Ruby constant Filter (OptionalConfig)"
+      }
+    ]
+  },
+  "telemetry": {
+    "clocks": [],
+    "value_maps": [],
+    "bounds_sets": [],
+    "signals": []
+  },
+  "extensions": {}
+}

@@ -1,0 +1,122 @@
+{
+  "source": "flowcount.rb",
+  "roots": [
+    {
+      "name": "flowcount",
+      "kind": "xdp",
+      "decl": {
+        "file": "flowcount.rb",
+        "line": 44,
+        "col": 1
+      },
+      "def": {
+        "file": "flowcount.rb",
+        "line": 13,
+        "col": 1
+      }
+    }
+  ],
+  "functions": [
+    {
+      "name": "flowcount",
+      "membership": [
+        "bpf"
+      ]
+    },
+    {
+      "name": "frame",
+      "membership": [
+        "user"
+      ]
+    },
+    {
+      "name": "show",
+      "membership": [
+        "user"
+      ]
+    }
+  ],
+  "edges": [
+    {
+      "from": "\u003ctop\u003e",
+      "to": "frame",
+      "pos": {
+        "file": "flowcount.rb",
+        "line": 113,
+        "col": 40
+      },
+      "dispatch": "direct"
+    },
+    {
+      "from": "\u003ctop\u003e",
+      "to": "frame",
+      "pos": {
+        "file": "flowcount.rb",
+        "line": 114,
+        "col": 40
+      },
+      "dispatch": "direct"
+    },
+    {
+      "from": "\u003ctop\u003e",
+      "to": "frame",
+      "pos": {
+        "file": "flowcount.rb",
+        "line": 115,
+        "col": 40
+      },
+      "dispatch": "direct"
+    },
+    {
+      "from": "\u003ctop\u003e",
+      "to": "frame",
+      "pos": {
+        "file": "flowcount.rb",
+        "line": 116,
+        "col": 40
+      },
+      "dispatch": "direct"
+    },
+    {
+      "from": "\u003ctop\u003e",
+      "to": "frame",
+      "pos": {
+        "file": "flowcount.rb",
+        "line": 117,
+        "col": 40
+      },
+      "dispatch": "direct"
+    },
+    {
+      "from": "\u003ctop\u003e",
+      "to": "frame",
+      "pos": {
+        "file": "flowcount.rb",
+        "line": 118,
+        "col": 40
+      },
+      "dispatch": "direct"
+    },
+    {
+      "from": "\u003ctop\u003e",
+      "to": "show",
+      "pos": {
+        "file": "flowcount.rb",
+        "line": 119,
+        "col": 3
+      },
+      "dispatch": "direct"
+    },
+    {
+      "from": "\u003ctop\u003e",
+      "to": "show",
+      "pos": {
+        "file": "flowcount.rb",
+        "line": 146,
+        "col": 3
+      },
+      "dispatch": "direct"
+    }
+  ],
+  "diagnostics": []
+}

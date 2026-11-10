@@ -1,0 +1,109 @@
+{
+  "version": 1,
+  "coverage": {
+    "programs": "complete",
+    "maps": "complete",
+    "records": "complete",
+    "telemetry": "complete"
+  },
+  "core": {
+    "kernel_types": [
+      {
+        "name": "task_struct",
+        "note": "Ruby Struct Task",
+        "fields": [
+          {
+            "name": "pid",
+            "type": {
+              "kind": "int",
+              "bits": 32,
+              "signed": true,
+              "endianness": "little",
+              "alignment": 4
+            }
+          },
+          {
+            "name": "tgid",
+            "type": {
+              "kind": "int",
+              "bits": 32,
+              "signed": true,
+              "endianness": "little",
+              "alignment": 4
+            }
+          }
+        ]
+      }
+    ],
+    "records": [],
+    "maps": [
+      {
+        "symbol": "Cfg",
+        "kind": "array",
+        "key": {
+          "kind": "int",
+          "bits": 32,
+          "signed": false,
+          "endianness": "little",
+          "alignment": 4
+        },
+        "value": {
+          "kind": "int",
+          "bits": 32,
+          "signed": false,
+          "endianness": "little",
+          "alignment": 4
+        },
+        "max_entries": 1,
+        "flags": 0,
+        "record": "",
+        "note": "Ruby constant Cfg"
+      },
+      {
+        "symbol": "Out",
+        "kind": "array",
+        "key": {
+          "kind": "int",
+          "bits": 32,
+          "signed": false,
+          "endianness": "little",
+          "alignment": 4
+        },
+        "value": {
+          "kind": "int",
+          "bits": 64,
+          "signed": false,
+          "endianness": "little",
+          "alignment": 8
+        },
+        "max_entries": 3,
+        "flags": 0,
+        "record": "",
+        "note": "Ruby constant Out"
+      }
+    ],
+    "programs": [
+      {
+        "name": "on_fork",
+        "kind": "tp_btf",
+        "attach_target": "sched_process_fork",
+        "maps": [
+          "Cfg",
+          "Out"
+        ],
+        "args": [
+          "task_struct",
+          "task_struct"
+        ],
+        "note": "Ruby def on_fork"
+      }
+    ]
+  },
+  "telemetry": {
+    "clocks": [],
+    "value_maps": [],
+    "bounds_sets": [],
+    "signals": []
+  },
+  "extensions": {}
+}

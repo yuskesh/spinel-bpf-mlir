@@ -1,0 +1,18 @@
+{
+  "maps": [
+    {
+      "name": "Types",
+      "kind": "array",
+      "key": "u32",
+      "value": "u64",
+      "max_entries": 8
+    },
+    {
+      "name": "Walks",
+      "kind": "array",
+      "key": "u32",
+      "value": "u64",
+      "max_entries": 2
+    }
+  ]
+}

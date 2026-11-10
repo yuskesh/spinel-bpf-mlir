@@ -1,0 +1,80 @@
+{
+  "version": 1,
+  "coverage": {
+    "programs": "complete",
+    "maps": "complete",
+    "records": "complete",
+    "telemetry": "complete"
+  },
+  "core": {
+    "records": [
+      {
+        "symbol": "Hist",
+        "id": 0,
+        "size": 64,
+        "min_size": 64,
+        "alignment": 4,
+        "required_through": "",
+        "note": "Ruby Struct Hist",
+        "fields": [
+          {
+            "name": "counts",
+            "offset": 0,
+            "expose": "int",
+            "note": "",
+            "type": {
+              "kind": "array",
+              "count": 16,
+              "element": {
+                "kind": "int",
+                "bits": 32,
+                "signed": false,
+                "endianness": "little",
+                "alignment": 4
+              }
+            }
+          }
+        ]
+      }
+    ],
+    "maps": [
+      {
+        "symbol": "Hists",
+        "kind": "percpu_array",
+        "key": {
+          "kind": "int",
+          "bits": 32,
+          "signed": false,
+          "endianness": "little",
+          "alignment": 4
+        },
+        "value": {
+          "kind": "record_ref",
+          "symbol": "Hist"
+        },
+        "max_entries": 1,
+        "flags": 0,
+        "record": "",
+        "note": "Ruby constant Hists"
+      }
+    ],
+    "programs": [
+      {
+        "name": "byte_hist",
+        "kind": "xdp",
+        "attach_target": "",
+        "maps": [
+          "Hists"
+        ],
+        "note": "Ruby def byte_hist"
+      }
+    ]
+  },
+  "telemetry": {
+    "clocks": [],
+    "value_maps": [],
+    "bounds_sets": [],
+    "signals": []
+  },
+  "extensions": {}
+}

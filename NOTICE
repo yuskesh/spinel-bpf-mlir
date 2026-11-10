@@ -1,0 +1,27 @@
+spinel-bpf-mlir
+Copyright (c) 2026 Yusuke Shinozaki
+
+spinel-bpf-mlir is licensed under Apache-2.0 WITH LLVM-exception. See LICENSE.
+
+Dependencies that are not included in this source tree:
+- github.com/yuskesh/go-bpf-mlir (Go module, fetched by the Go tool):
+  Apache-2.0 WITH LLVM-exception.
+- bpf-mlir, third_party/bpf-mlir (git submodule): Apache-2.0 WITH
+  LLVM-exception. Provides ebpf-compile, which scripts/setup.sh builds.
+- bpf-mlir-loader, third_party/bpf-mlir-loader (git submodule):
+  Apache-2.0 WITH LLVM-exception. Its own submodules are libbpf
+  (LGPL-2.1 OR BSD-2-Clause), elfutils libelf (GPL-2.0-or-later OR
+  LGPL-3.0-or-later) and zlib (zlib license); see the NOTICE of bpf-mlir-loader.
+- Spinel, third_party/spinel (git submodule, https://github.com/matz/spinel):
+  MIT License, Copyright (c) 2024- Yukihiro Matsumoto. Spinel is not copied
+  into this repository.
+- LLVM / MLIR 23.1.1, used to build bpf-mlir: Apache-2.0 WITH LLVM-exception.
+
+Conditions for distributing binaries
+
+A program built with spinelbpf contains the C loader of bpf-mlir-loader, which
+links libelf statically. This repository distributes source only. If you
+distribute such a binary, the conditions in the NOTICE of bpf-mlir-loader
+(libelf under LGPL-3.0, libbpf under BSD-2-Clause, zlib) apply to it.
+
+This is a summary and not legal advice.

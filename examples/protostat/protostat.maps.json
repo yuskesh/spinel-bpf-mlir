@@ -1,0 +1,28 @@
+{
+  "records": {
+    "Stats": {
+      "size": 16,
+      "members": [
+        {
+          "name": "packets",
+          "offset": 0,
+          "type": "u64"
+        },
+        {
+          "name": "bytes",
+          "offset": 8,
+          "type": "u64"
+        }
+      ]
+    }
+  },
+  "maps": [
+    {
+      "name": "PerKind",
+      "kind": "percpu_array",
+      "key": "u32",
+      "value": "record:Stats",
+      "max_entries": 7
+    }
+  ]
+}

@@ -1,0 +1,25 @@
+{
+  "maps": [
+    {
+      "name": "Ether",
+      "kind": "array",
+      "key": "u32",
+      "value": "u64",
+      "max_entries": 8
+    },
+    {
+      "name": "Proto",
+      "kind": "array",
+      "key": "u32",
+      "value": "u64",
+      "max_entries": 256
+    },
+    {
+      "name": "Udp",
+      "kind": "array",
+      "key": "u32",
+      "value": "u64",
+      "max_entries": 2
+    }
+  ]
+}

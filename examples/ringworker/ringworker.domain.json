@@ -1,0 +1,98 @@
+{
+  "source": "ringworker.rb",
+  "roots": [
+    {
+      "name": "ringworker",
+      "kind": "xdp",
+      "decl": {
+        "file": "ringworker.rb",
+        "line": 33,
+        "col": 1
+      },
+      "def": {
+        "file": "ringworker.rb",
+        "line": 13,
+        "col": 1
+      }
+    }
+  ],
+  "functions": [
+    {
+      "name": "drain",
+      "membership": [
+        "user"
+      ]
+    },
+    {
+      "name": "frame",
+      "membership": [
+        "user"
+      ]
+    },
+    {
+      "name": "read_kinds",
+      "membership": [
+        "user"
+      ]
+    },
+    {
+      "name": "ringworker",
+      "membership": [
+        "bpf"
+      ]
+    }
+  ],
+  "edges": [
+    {
+      "from": "\u003ctop\u003e",
+      "to": "read_kinds",
+      "pos": {
+        "file": "ringworker.rb",
+        "line": 118,
+        "col": 23
+      },
+      "dispatch": "direct"
+    },
+    {
+      "from": "\u003ctop\u003e",
+      "to": "drain",
+      "pos": {
+        "file": "ringworker.rb",
+        "line": 119,
+        "col": 5
+      },
+      "dispatch": "direct"
+    },
+    {
+      "from": "\u003ctop\u003e",
+      "to": "frame",
+      "pos": {
+        "file": "ringworker.rb",
+        "line": 124,
+        "col": 43
+      },
+      "dispatch": "direct"
+    },
+    {
+      "from": "\u003ctop\u003e",
+      "to": "read_kinds",
+      "pos": {
+        "file": "ringworker.rb",
+        "line": 133,
+        "col": 23
+      },
+      "dispatch": "direct"
+    },
+    {
+      "from": "\u003ctop\u003e",
+      "to": "drain",
+      "pos": {
+        "file": "ringworker.rb",
+        "line": 134,
+        "col": 5
+      },
+      "dispatch": "direct"
+    }
+  ],
+  "diagnostics": []
+}

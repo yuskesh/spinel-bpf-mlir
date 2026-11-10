@@ -1,0 +1,29 @@
+{
+  "source": "xdpcount.rb",
+  "roots": [
+    {
+      "name": "count_pkts",
+      "kind": "xdp",
+      "decl": {
+        "file": "xdpcount.rb",
+        "line": 13,
+        "col": 1
+      },
+      "def": {
+        "file": "xdpcount.rb",
+        "line": 5,
+        "col": 1
+      }
+    }
+  ],
+  "functions": [
+    {
+      "name": "count_pkts",
+      "membership": [
+        "bpf"
+      ]
+    }
+  ],
+  "edges": [],
+  "diagnostics": []
+}

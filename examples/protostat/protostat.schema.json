@@ -1,0 +1,89 @@
+{
+  "version": 1,
+  "coverage": {
+    "programs": "complete",
+    "maps": "complete",
+    "records": "complete",
+    "telemetry": "complete"
+  },
+  "core": {
+    "records": [
+      {
+        "symbol": "Stats",
+        "id": 0,
+        "size": 16,
+        "min_size": 16,
+        "alignment": 8,
+        "required_through": "",
+        "note": "Ruby Struct Stats",
+        "fields": [
+          {
+            "name": "packets",
+            "offset": 0,
+            "expose": "int",
+            "note": "",
+            "type": {
+              "kind": "int",
+              "bits": 64,
+              "signed": false,
+              "endianness": "little",
+              "alignment": 8
+            }
+          },
+          {
+            "name": "bytes",
+            "offset": 8,
+            "expose": "int",
+            "note": "",
+            "type": {
+              "kind": "int",
+              "bits": 64,
+              "signed": false,
+              "endianness": "little",
+              "alignment": 8
+            }
+          }
+        ]
+      }
+    ],
+    "maps": [
+      {
+        "symbol": "PerKind",
+        "kind": "percpu_array",
+        "key": {
+          "kind": "int",
+          "bits": 32,
+          "signed": false,
+          "endianness": "little",
+          "alignment": 4
+        },
+        "value": {
+          "kind": "record_ref",
+          "symbol": "Stats"
+        },
+        "max_entries": 7,
+        "flags": 0,
+        "record": "",
+        "note": "Ruby constant PerKind"
+      }
+    ],
+    "programs": [
+      {
+        "name": "protostat",
+        "kind": "xdp",
+        "attach_target": "",
+        "maps": [
+          "PerKind"
+        ],
+        "note": "Ruby def protostat"
+      }
+    ]
+  },
+  "telemetry": {
+    "clocks": [],
+    "value_maps": [],
+    "bounds_sets": [],
+    "signals": []
+  },
+  "extensions": {}
+}

@@ -1,0 +1,49 @@
+{
+  "source": "pollwatch.rb",
+  "roots": [
+    {
+      "name": "on_poll",
+      "kind": "kprobe",
+      "decl": {
+        "file": "pollwatch.rb",
+        "line": 20,
+        "col": 1
+      },
+      "def": {
+        "file": "pollwatch.rb",
+        "line": 12,
+        "col": 1
+      }
+    },
+    {
+      "name": "on_test",
+      "kind": "fentry",
+      "decl": {
+        "file": "pollwatch.rb",
+        "line": 28,
+        "col": 1
+      },
+      "def": {
+        "file": "pollwatch.rb",
+        "line": 22,
+        "col": 1
+      }
+    }
+  ],
+  "functions": [
+    {
+      "name": "on_poll",
+      "membership": [
+        "bpf"
+      ]
+    },
+    {
+      "name": "on_test",
+      "membership": [
+        "bpf"
+      ]
+    }
+  ],
+  "edges": [],
+  "diagnostics": []
+}

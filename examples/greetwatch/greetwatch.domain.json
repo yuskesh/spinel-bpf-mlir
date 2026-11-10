@@ -1,0 +1,92 @@
+{
+  "source": "greetwatch.rb",
+  "roots": [
+    {
+      "name": "on_greet",
+      "kind": "uprobe",
+      "decl": {
+        "file": "greetwatch.rb",
+        "line": 19,
+        "col": 1
+      },
+      "def": {
+        "file": "greetwatch.rb",
+        "line": 11,
+        "col": 1
+      }
+    }
+  ],
+  "functions": [
+    {
+      "name": "on_greet",
+      "membership": [
+        "bpf"
+      ]
+    },
+    {
+      "name": "show",
+      "membership": [
+        "user"
+      ]
+    },
+    {
+      "name": "text",
+      "membership": [
+        "user"
+      ]
+    }
+  ],
+  "edges": [
+    {
+      "from": "show",
+      "to": "text",
+      "pos": {
+        "file": "greetwatch.rb",
+        "line": 115,
+        "col": 72
+      },
+      "dispatch": "direct"
+    },
+    {
+      "from": "\u003ctop\u003e",
+      "to": "show",
+      "pos": {
+        "file": "greetwatch.rb",
+        "line": 144,
+        "col": 5
+      },
+      "dispatch": "direct"
+    },
+    {
+      "from": "\u003ctop\u003e",
+      "to": "text",
+      "pos": {
+        "file": "greetwatch.rb",
+        "line": 146,
+        "col": 8
+      },
+      "dispatch": "direct"
+    },
+    {
+      "from": "\u003ctop\u003e",
+      "to": "text",
+      "pos": {
+        "file": "greetwatch.rb",
+        "line": 147,
+        "col": 45
+      },
+      "dispatch": "direct"
+    },
+    {
+      "from": "\u003ctop\u003e",
+      "to": "show",
+      "pos": {
+        "file": "greetwatch.rb",
+        "line": 181,
+        "col": 7
+      },
+      "dispatch": "direct"
+    }
+  ],
+  "diagnostics": []
+}

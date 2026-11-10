@@ -1,0 +1,182 @@
+{
+  "source": "ethertype.rb",
+  "roots": [
+    {
+      "name": "count_ether",
+      "kind": "xdp",
+      "decl": {
+        "file": "ethertype.rb",
+        "line": 51,
+        "col": 1
+      },
+      "def": {
+        "file": "ethertype.rb",
+        "line": 9,
+        "col": 1
+      }
+    }
+  ],
+  "functions": [
+    {
+      "name": "count_ether",
+      "membership": [
+        "bpf"
+      ]
+    },
+    {
+      "name": "frame",
+      "membership": [
+        "user"
+      ]
+    },
+    {
+      "name": "show",
+      "membership": [
+        "user"
+      ]
+    }
+  ],
+  "edges": [
+    {
+      "from": "\u003ctop\u003e",
+      "to": "frame",
+      "pos": {
+        "file": "ethertype.rb",
+        "line": 114,
+        "col": 5
+      },
+      "dispatch": "direct"
+    },
+    {
+      "from": "\u003ctop\u003e",
+      "to": "frame",
+      "pos": {
+        "file": "ethertype.rb",
+        "line": 115,
+        "col": 5
+      },
+      "dispatch": "direct"
+    },
+    {
+      "from": "\u003ctop\u003e",
+      "to": "frame",
+      "pos": {
+        "file": "ethertype.rb",
+        "line": 116,
+        "col": 5
+      },
+      "dispatch": "direct"
+    },
+    {
+      "from": "\u003ctop\u003e",
+      "to": "frame",
+      "pos": {
+        "file": "ethertype.rb",
+        "line": 117,
+        "col": 5
+      },
+      "dispatch": "direct"
+    },
+    {
+      "from": "\u003ctop\u003e",
+      "to": "frame",
+      "pos": {
+        "file": "ethertype.rb",
+        "line": 118,
+        "col": 5
+      },
+      "dispatch": "direct"
+    },
+    {
+      "from": "\u003ctop\u003e",
+      "to": "frame",
+      "pos": {
+        "file": "ethertype.rb",
+        "line": 119,
+        "col": 5
+      },
+      "dispatch": "direct"
+    },
+    {
+      "from": "\u003ctop\u003e",
+      "to": "frame",
+      "pos": {
+        "file": "ethertype.rb",
+        "line": 120,
+        "col": 5
+      },
+      "dispatch": "direct"
+    },
+    {
+      "from": "\u003ctop\u003e",
+      "to": "frame",
+      "pos": {
+        "file": "ethertype.rb",
+        "line": 121,
+        "col": 5
+      },
+      "dispatch": "direct"
+    },
+    {
+      "from": "\u003ctop\u003e",
+      "to": "frame",
+      "pos": {
+        "file": "ethertype.rb",
+        "line": 122,
+        "col": 5
+      },
+      "dispatch": "direct"
+    },
+    {
+      "from": "\u003ctop\u003e",
+      "to": "frame",
+      "pos": {
+        "file": "ethertype.rb",
+        "line": 123,
+        "col": 5
+      },
+      "dispatch": "direct"
+    },
+    {
+      "from": "\u003ctop\u003e",
+      "to": "frame",
+      "pos": {
+        "file": "ethertype.rb",
+        "line": 124,
+        "col": 5
+      },
+      "dispatch": "direct"
+    },
+    {
+      "from": "\u003ctop\u003e",
+      "to": "frame",
+      "pos": {
+        "file": "ethertype.rb",
+        "line": 125,
+        "col": 5
+      },
+      "dispatch": "direct"
+    },
+    {
+      "from": "\u003ctop\u003e",
+      "to": "show",
+      "pos": {
+        "file": "ethertype.rb",
+        "line": 133,
+        "col": 7
+      },
+      "dispatch": "direct"
+    },
+    {
+      "from": "\u003ctop\u003e",
+      "to": "show",
+      "pos": {
+        "file": "ethertype.rb",
+        "line": 148,
+        "col": 3
+      },
+      "dispatch": "direct"
+    }
+  ],
+  "diagnostics": []
+}

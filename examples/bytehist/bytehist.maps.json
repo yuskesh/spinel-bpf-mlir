@@ -1,0 +1,23 @@
+{
+  "records": {
+    "Hist": {
+      "size": 64,
+      "members": [
+        {
+          "name": "counts",
+          "offset": 0,
+          "type": "[16]u32"
+        }
+      ]
+    }
+  },
+  "maps": [
+    {
+      "name": "Hists",
+      "kind": "percpu_array",
+      "key": "u32",
+      "value": "record:Hist",
+      "max_entries": 1
+    }
+  ]
+}

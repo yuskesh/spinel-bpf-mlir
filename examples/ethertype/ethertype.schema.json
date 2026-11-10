@@ -1,0 +1,100 @@
+{
+  "version": 1,
+  "coverage": {
+    "programs": "complete",
+    "maps": "complete",
+    "records": "complete",
+    "telemetry": "complete"
+  },
+  "core": {
+    "records": [],
+    "maps": [
+      {
+        "symbol": "Ether",
+        "kind": "array",
+        "key": {
+          "kind": "int",
+          "bits": 32,
+          "signed": false,
+          "endianness": "little",
+          "alignment": 4
+        },
+        "value": {
+          "kind": "int",
+          "bits": 64,
+          "signed": false,
+          "endianness": "little",
+          "alignment": 8
+        },
+        "max_entries": 8,
+        "flags": 0,
+        "record": "",
+        "note": "Ruby constant Ether"
+      },
+      {
+        "symbol": "Proto",
+        "kind": "array",
+        "key": {
+          "kind": "int",
+          "bits": 32,
+          "signed": false,
+          "endianness": "little",
+          "alignment": 4
+        },
+        "value": {
+          "kind": "int",
+          "bits": 64,
+          "signed": false,
+          "endianness": "little",
+          "alignment": 8
+        },
+        "max_entries": 256,
+        "flags": 0,
+        "record": "",
+        "note": "Ruby constant Proto"
+      },
+      {
+        "symbol": "Udp",
+        "kind": "array",
+        "key": {
+          "kind": "int",
+          "bits": 32,
+          "signed": false,
+          "endianness": "little",
+          "alignment": 4
+        },
+        "value": {
+          "kind": "int",
+          "bits": 64,
+          "signed": false,
+          "endianness": "little",
+          "alignment": 8
+        },
+        "max_entries": 2,
+        "flags": 0,
+        "record": "",
+        "note": "Ruby constant Udp"
+      }
+    ],
+    "programs": [
+      {
+        "name": "count_ether",
+        "kind": "xdp",
+        "attach_target": "",
+        "maps": [
+          "Ether",
+          "Proto",
+          "Udp"
+        ],
+        "note": "Ruby def count_ether"
+      }
+    ]
+  },
+  "telemetry": {
+    "clocks": [],
+    "value_maps": [],
+    "bounds_sets": [],
+    "signals": []
+  },
+  "extensions": {}
+}

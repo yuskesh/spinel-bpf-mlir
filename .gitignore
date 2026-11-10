@@ -1,0 +1,8 @@
+/build/
+*.bpf.o
+!examples/**/*.bpf.o
+.DS_Store
+._*
+.claude/
+*.a
+**/golib/*.h

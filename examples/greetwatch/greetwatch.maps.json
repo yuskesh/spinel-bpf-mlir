@@ -1,0 +1,45 @@
+{
+  "records": {
+    "Greeting": {
+      "size": 56,
+      "members": [
+        {
+          "name": "pid_tgid",
+          "offset": 0,
+          "type": "u64"
+        },
+        {
+          "name": "count",
+          "offset": 8,
+          "type": "u32"
+        },
+        {
+          "name": "status",
+          "offset": 16,
+          "type": "i64"
+        },
+        {
+          "name": "name",
+          "offset": 24,
+          "type": "[32]u8"
+        }
+      ]
+    }
+  },
+  "maps": [
+    {
+      "name": "Stats",
+      "kind": "array",
+      "key": "u32",
+      "value": "u64",
+      "max_entries": 2
+    },
+    {
+      "name": "Greetings",
+      "kind": "ringbuf",
+      "key": "-",
+      "value": "record:Greeting",
+      "max_entries": 65536
+    }
+  ]
+}

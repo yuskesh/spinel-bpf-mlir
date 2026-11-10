@@ -1,0 +1,29 @@
+{
+  "source": "forkcount.rb",
+  "roots": [
+    {
+      "name": "on_fork",
+      "kind": "tp_btf",
+      "decl": {
+        "file": "forkcount.rb",
+        "line": 23,
+        "col": 1
+      },
+      "def": {
+        "file": "forkcount.rb",
+        "line": 11,
+        "col": 1
+      }
+    }
+  ],
+  "functions": [
+    {
+      "name": "on_fork",
+      "membership": [
+        "bpf"
+      ]
+    }
+  ],
+  "edges": [],
+  "diagnostics": []
+}

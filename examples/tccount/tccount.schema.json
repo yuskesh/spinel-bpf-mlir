@@ -1,0 +1,72 @@
+{
+  "version": 1,
+  "coverage": {
+    "programs": "complete",
+    "maps": "complete",
+    "records": "complete",
+    "telemetry": "complete"
+  },
+  "core": {
+    "records": [],
+    "maps": [
+      {
+        "symbol": "Counts",
+        "kind": "array",
+        "key": {
+          "kind": "int",
+          "bits": 32,
+          "signed": false,
+          "endianness": "little",
+          "alignment": 4
+        },
+        "value": {
+          "kind": "int",
+          "bits": 64,
+          "signed": false,
+          "endianness": "little",
+          "alignment": 8
+        },
+        "max_entries": 15,
+        "flags": 0,
+        "record": "",
+        "note": "Ruby constant Counts"
+      }
+    ],
+    "programs": [
+      {
+        "name": "tcc_xdp",
+        "kind": "xdp",
+        "attach_target": "",
+        "maps": [
+          "Counts"
+        ],
+        "note": "Ruby def tcc_xdp"
+      },
+      {
+        "name": "tcc_in",
+        "kind": "sched_cls",
+        "attach_target": "ingress",
+        "maps": [
+          "Counts"
+        ],
+        "note": "Ruby def tcc_in"
+      },
+      {
+        "name": "tcc_out",
+        "kind": "sched_cls",
+        "attach_target": "egress",
+        "maps": [
+          "Counts"
+        ],
+        "note": "Ruby def tcc_out"
+      }
+    ]
+  },
+  "telemetry": {
+    "clocks": [],
+    "value_maps": [],
+    "bounds_sets": [],
+    "signals": []
+  },
+  "extensions": {}
+}

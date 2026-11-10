@@ -1,0 +1,18 @@
+{
+  "maps": [
+    {
+      "name": "Cfg",
+      "kind": "array",
+      "key": "u32",
+      "value": "u32",
+      "max_entries": 1
+    },
+    {
+      "name": "Out",
+      "kind": "array",
+      "key": "u32",
+      "value": "u64",
+      "max_entries": 3
+    }
+  ]
+}

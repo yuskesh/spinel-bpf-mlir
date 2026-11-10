@@ -1,0 +1,98 @@
+{
+  "source": "protostat.rb",
+  "roots": [
+    {
+      "name": "protostat",
+      "kind": "xdp",
+      "decl": {
+        "file": "protostat.rb",
+        "line": 49,
+        "col": 1
+      },
+      "def": {
+        "file": "protostat.rb",
+        "line": 12,
+        "col": 1
+      }
+    }
+  ],
+  "functions": [
+    {
+      "name": "frame",
+      "membership": [
+        "user"
+      ]
+    },
+    {
+      "name": "kind_sums",
+      "membership": [
+        "user"
+      ]
+    },
+    {
+      "name": "protostat",
+      "membership": [
+        "bpf"
+      ]
+    },
+    {
+      "name": "show",
+      "membership": [
+        "user"
+      ]
+    }
+  ],
+  "edges": [
+    {
+      "from": "show",
+      "to": "kind_sums",
+      "pos": {
+        "file": "protostat.rb",
+        "line": 121,
+        "col": 9
+      },
+      "dispatch": "direct"
+    },
+    {
+      "from": "\u003ctop\u003e",
+      "to": "frame",
+      "pos": {
+        "file": "protostat.rb",
+        "line": 133,
+        "col": 42
+      },
+      "dispatch": "direct"
+    },
+    {
+      "from": "\u003ctop\u003e",
+      "to": "show",
+      "pos": {
+        "file": "protostat.rb",
+        "line": 135,
+        "col": 3
+      },
+      "dispatch": "direct"
+    },
+    {
+      "from": "\u003ctop\u003e",
+      "to": "kind_sums",
+      "pos": {
+        "file": "protostat.rb",
+        "line": 140,
+        "col": 9
+      },
+      "dispatch": "direct"
+    },
+    {
+      "from": "\u003ctop\u003e",
+      "to": "show",
+      "pos": {
+        "file": "protostat.rb",
+        "line": 159,
+        "col": 3
+      },
+      "dispatch": "direct"
+    }
+  ],
+  "diagnostics": []
+}

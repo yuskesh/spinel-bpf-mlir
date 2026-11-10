@@ -1,0 +1,132 @@
+{
+  "source": "bytehist.rb",
+  "roots": [
+    {
+      "name": "byte_hist",
+      "kind": "xdp",
+      "decl": {
+        "file": "bytehist.rb",
+        "line": 20,
+        "col": 1
+      },
+      "def": {
+        "file": "bytehist.rb",
+        "line": 9,
+        "col": 1
+      }
+    }
+  ],
+  "functions": [
+    {
+      "name": "byte_hist",
+      "membership": [
+        "bpf"
+      ]
+    },
+    {
+      "name": "packet",
+      "membership": [
+        "user"
+      ]
+    },
+    {
+      "name": "sums",
+      "membership": [
+        "user"
+      ]
+    }
+  ],
+  "edges": [
+    {
+      "from": "\u003ctop\u003e",
+      "to": "packet",
+      "pos": {
+        "file": "bytehist.rb",
+        "line": 63,
+        "col": 11
+      },
+      "dispatch": "direct"
+    },
+    {
+      "from": "\u003ctop\u003e",
+      "to": "packet",
+      "pos": {
+        "file": "bytehist.rb",
+        "line": 63,
+        "col": 29
+      },
+      "dispatch": "direct"
+    },
+    {
+      "from": "\u003ctop\u003e",
+      "to": "packet",
+      "pos": {
+        "file": "bytehist.rb",
+        "line": 63,
+        "col": 47
+      },
+      "dispatch": "direct"
+    },
+    {
+      "from": "\u003ctop\u003e",
+      "to": "packet",
+      "pos": {
+        "file": "bytehist.rb",
+        "line": 63,
+        "col": 65
+      },
+      "dispatch": "direct"
+    },
+    {
+      "from": "\u003ctop\u003e",
+      "to": "packet",
+      "pos": {
+        "file": "bytehist.rb",
+        "line": 63,
+        "col": 83
+      },
+      "dispatch": "direct"
+    },
+    {
+      "from": "\u003ctop\u003e",
+      "to": "packet",
+      "pos": {
+        "file": "bytehist.rb",
+        "line": 63,
+        "col": 101
+      },
+      "dispatch": "direct"
+    },
+    {
+      "from": "\u003ctop\u003e",
+      "to": "packet",
+      "pos": {
+        "file": "bytehist.rb",
+        "line": 63,
+        "col": 119
+      },
+      "dispatch": "direct"
+    },
+    {
+      "from": "\u003ctop\u003e",
+      "to": "sums",
+      "pos": {
+        "file": "bytehist.rb",
+        "line": 70,
+        "col": 7
+      },
+      "dispatch": "direct"
+    },
+    {
+      "from": "\u003ctop\u003e",
+      "to": "sums",
+      "pos": {
+        "file": "bytehist.rb",
+        "line": 80,
+        "col": 18
+      },
+      "dispatch": "direct"
+    }
+  ],
+  "diagnostics": []
+}

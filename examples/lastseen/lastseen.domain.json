@@ -1,0 +1,134 @@
+{
+  "source": "lastseen.rb",
+  "roots": [
+    {
+      "name": "last_seen",
+      "kind": "xdp",
+      "decl": {
+        "file": "lastseen.rb",
+        "line": 48,
+        "col": 1
+      },
+      "def": {
+        "file": "lastseen.rb",
+        "line": 13,
+        "col": 1
+      }
+    }
+  ],
+  "functions": [
+    {
+      "name": "frame",
+      "membership": [
+        "user"
+      ]
+    },
+    {
+      "name": "frame_count",
+      "membership": [
+        "user"
+      ]
+    },
+    {
+      "name": "last",
+      "membership": [
+        "user"
+      ]
+    },
+    {
+      "name": "last_seen",
+      "membership": [
+        "bpf"
+      ]
+    },
+    {
+      "name": "show",
+      "membership": [
+        "user"
+      ]
+    }
+  ],
+  "edges": [
+    {
+      "from": "show",
+      "to": "frame_count",
+      "pos": {
+        "file": "lastseen.rb",
+        "line": 107,
+        "col": 17
+      },
+      "dispatch": "direct"
+    },
+    {
+      "from": "show",
+      "to": "last",
+      "pos": {
+        "file": "lastseen.rb",
+        "line": 110,
+        "col": 7
+      },
+      "dispatch": "direct"
+    },
+    {
+      "from": "\u003ctop\u003e",
+      "to": "frame",
+      "pos": {
+        "file": "lastseen.rb",
+        "line": 120,
+        "col": 42
+      },
+      "dispatch": "direct"
+    },
+    {
+      "from": "\u003ctop\u003e",
+      "to": "last",
+      "pos": {
+        "file": "lastseen.rb",
+        "line": 129,
+        "col": 9
+      },
+      "dispatch": "direct"
+    },
+    {
+      "from": "\u003ctop\u003e",
+      "to": "show",
+      "pos": {
+        "file": "lastseen.rb",
+        "line": 142,
+        "col": 3
+      },
+      "dispatch": "direct"
+    },
+    {
+      "from": "\u003ctop\u003e",
+      "to": "frame_count",
+      "pos": {
+        "file": "lastseen.rb",
+        "line": 146,
+        "col": 8
+      },
+      "dispatch": "direct"
+    },
+    {
+      "from": "\u003ctop\u003e",
+      "to": "frame_count",
+      "pos": {
+        "file": "lastseen.rb",
+        "line": 147,
+        "col": 42
+      },
+      "dispatch": "direct"
+    },
+    {
+      "from": "\u003ctop\u003e",
+      "to": "show",
+      "pos": {
+        "file": "lastseen.rb",
+        "line": 163,
+        "col": 3
+      },
+      "dispatch": "direct"
+    }
+  ],
+  "diagnostics": []
+}

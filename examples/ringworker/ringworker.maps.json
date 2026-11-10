@@ -1,0 +1,49 @@
+{
+  "records": {
+    "Ev": {
+      "size": 8,
+      "members": [
+        {
+          "name": "kind",
+          "offset": 0,
+          "type": "u32"
+        },
+        {
+          "name": "ethertype",
+          "offset": 4,
+          "type": "u32"
+        }
+      ]
+    }
+  },
+  "maps": [
+    {
+      "name": "Counts",
+      "kind": "array",
+      "key": "u32",
+      "value": "u64",
+      "max_entries": 4
+    },
+    {
+      "name": "Drops",
+      "kind": "array",
+      "key": "u32",
+      "value": "u64",
+      "max_entries": 1
+    },
+    {
+      "name": "Ack",
+      "kind": "array",
+      "key": "u32",
+      "value": "u64",
+      "max_entries": 1
+    },
+    {
+      "name": "Events",
+      "kind": "ringbuf",
+      "key": "-",
+      "value": "record:Ev",
+      "max_entries": 4096
+    }
+  ]
+}

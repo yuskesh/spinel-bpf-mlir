@@ -1,0 +1,32 @@
+{
+  "maps": [
+    {
+      "name": "Polls",
+      "kind": "hash",
+      "key": "u32",
+      "value": "u64",
+      "max_entries": 1024
+    },
+    {
+      "name": "Nfds",
+      "kind": "hash",
+      "key": "u32",
+      "value": "u64",
+      "max_entries": 1024
+    },
+    {
+      "name": "Tests",
+      "kind": "array",
+      "key": "u32",
+      "value": "u64",
+      "max_entries": 1
+    }
+  ],
+  "globals": [
+    {
+      "name": "Filter",
+      "section": "rodata",
+      "type": "u32"
+    }
+  ]
+}

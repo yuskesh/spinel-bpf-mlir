@@ -1,0 +1,138 @@
+{
+  "source": "pktlog.rb",
+  "roots": [
+    {
+      "name": "pktlog",
+      "kind": "xdp",
+      "decl": {
+        "file": "pktlog.rb",
+        "line": 30,
+        "col": 1
+      },
+      "def": {
+        "file": "pktlog.rb",
+        "line": 11,
+        "col": 1
+      }
+    }
+  ],
+  "functions": [
+    {
+      "name": "event",
+      "membership": [
+        "user"
+      ]
+    },
+    {
+      "name": "frame",
+      "membership": [
+        "user"
+      ]
+    },
+    {
+      "name": "kind",
+      "membership": [
+        "user"
+      ]
+    },
+    {
+      "name": "pktlog",
+      "membership": [
+        "bpf"
+      ]
+    }
+  ],
+  "edges": [
+    {
+      "from": "\u003ctop\u003e",
+      "to": "frame",
+      "pos": {
+        "file": "pktlog.rb",
+        "line": 103,
+        "col": 39
+      },
+      "dispatch": "direct"
+    },
+    {
+      "from": "\u003ctop\u003e",
+      "to": "event",
+      "pos": {
+        "file": "pktlog.rb",
+        "line": 104,
+        "col": 9
+      },
+      "dispatch": "direct"
+    },
+    {
+      "from": "\u003ctop\u003e",
+      "to": "frame",
+      "pos": {
+        "file": "pktlog.rb",
+        "line": 118,
+        "col": 39
+      },
+      "dispatch": "direct"
+    },
+    {
+      "from": "\u003ctop\u003e",
+      "to": "event",
+      "pos": {
+        "file": "pktlog.rb",
+        "line": 122,
+        "col": 10
+      },
+      "dispatch": "direct"
+    },
+    {
+      "from": "\u003ctop\u003e",
+      "to": "event",
+      "pos": {
+        "file": "pktlog.rb",
+        "line": 146,
+        "col": 9
+      },
+      "dispatch": "direct"
+    },
+    {
+      "from": "\u003ctop\u003e",
+      "to": "kind",
+      "pos": {
+        "file": "pktlog.rb",
+        "line": 149,
+        "col": 14
+      },
+      "dispatch": "direct"
+    },
+    {
+      "from": "\u003ctop\u003e",
+      "to": "event",
+      "pos": {
+        "file": "pktlog.rb",
+        "line": 155,
+        "col": 7
+      },
+      "dispatch": "direct"
+    },
+    {
+      "from": "\u003ctop\u003e",
+      "to": "kind",
+      "pos": {
+        "file": "pktlog.rb",
+        "line": 158,
+        "col": 12
+      },
+      "dispatch": "direct"
+    },
+    {
+      "from": "\u003ctop\u003e",
+      "to": "event",
+      "pos": {
+        "file": "pktlog.rb",
+        "line": 159,
+        "col": 9
+      },
+      "dispatch": "direct"
+    }
+  ],
+  "diagnostics": []
+}
