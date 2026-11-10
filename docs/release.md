@@ -1,5 +1,18 @@
 # Release notes
 
+## v0.9.1 — go.sum fix
+
+- **Fixed:** the `go.sum` of v0.9.0 recorded a stale checksum for
+  `github.com/yuskesh/go-bpf-mlir v0.19.0`, so `go mod download` in a fresh clone of
+  v0.9.0 failed with a checksum mismatch. v0.9.1 records the correct checksum.
+- **Unchanged:** everything else. The accepted and rejected programs, the reason codes,
+  the dependencies and the generated ELF objects are the same as in v0.9.0. Only the
+  version string changes, in `--version` and in the second line of each generated
+  `.mlir`.
+- The tutorial's `--version` output now shows the bml line as the build prints it
+  (`bml v0.1.0 (commit 41ec56f)`).
+- The limits, the version promise and the dependencies below apply to v0.9.1 as well.
+
 ## v0.9.0 — first public release
 
 ### Limits (read first)
@@ -45,9 +58,9 @@
   and the `SpinelBPF` library), the reason codes and the generated file formats can
   change in the next release. Changes are named in that release's notes.
 - Reason codes are never renumbered or reused. New codes are appended. SB012 is retired.
-- `spinelbpf --version` prints `spinel-bpf-mlir v0.9.0 (commit <build commit>[+dirty])`.
+- `spinelbpf --version` prints `spinel-bpf-mlir v0.9.1 (commit <build commit>[+dirty])`.
   The version is written only into the second line of each generated `.mlir`
-  (`// spinel-bpf-mlir v0.9.0`). Schemas, maps.json, domain.json and ELF objects carry
+  (`// spinel-bpf-mlir v0.9.1`). Schemas, maps.json, domain.json and ELF objects carry
   no version.
 
 ### Dependencies

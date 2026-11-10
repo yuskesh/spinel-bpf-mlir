@@ -7,7 +7,7 @@ import (
 )
 
 const (
-	Version = "v0.9.0"
+	Version = "v0.9.1"
 	BML     = "41ec56f"
 	Spinel  = "086d514d"
 )

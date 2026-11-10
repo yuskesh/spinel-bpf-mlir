@@ -10,7 +10,7 @@ import (
 
 var formBuildArgs = []string{}
 
-var versionFlagWant = regexp.MustCompile(`^spinel-bpf-mlir v0\.9\.0 \(commit ([0-9a-f]{12}(\+dirty)?|unknown)\)
+var versionFlagWant = regexp.MustCompile(`^spinel-bpf-mlir v0\.9\.1 \(commit ([0-9a-f]{12}(\+dirty)?|unknown)\)
 bpf-mlir v1\.21\.0 \(commit 41b18856; Go packages github\.com/yuskesh/go-bpf-mlir v0\.19\.0, go\.mod require\)
 bml v0\.1\.0 \(commit 41ec56f\)
 spinel 086d514d
