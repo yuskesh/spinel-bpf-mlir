@@ -1,6 +1,6 @@
 require "bpf"
 
-
+# A per-CPU record member takes only += and -= (*= is SB001)
 S = Struct.new(:n, :m)
 BPF.record(S, n: :u64, m: :u64)
 M = BPF::PerCpuRecordMap.new("M", S.new(0, 0), 2)

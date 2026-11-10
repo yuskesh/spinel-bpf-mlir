@@ -5,6 +5,11 @@ import (
 	"math/big"
 )
 
+// Interval analysis: the closed interval of the mathematical value of a Ruby Integer expression, held in math/big.
+// An operation whose result may not fit in i64 is rejected — when it fits, nothing wraps, so Ruby (CRuby's arbitrary precision,
+// Spinel's i64) and BPF (i64) compute the same value.
+
+// Ival is the closed interval [Lo, Hi].
 type Ival struct{ Lo, Hi *big.Int }
 
 var (
@@ -17,7 +22,7 @@ var (
 	i32Max    = new(big.Int).Sub(new(big.Int).Lsh(bigOne, 31), bigOne)
 	u64Max    = new(big.Int).Sub(new(big.Int).Lsh(bigOne, 64), bigOne)
 	fullI64   = Ival{i64Min, i64Max}
-	literalLo = new(big.Int).Add(i64Min, bigOne)
+	literalLo = new(big.Int).Add(i64Min, bigOne) // literals exclude −2^63 (Spinel's nil marker)
 )
 
 func point(v *big.Int) Ival { return Ival{new(big.Int).Set(v), new(big.Int).Set(v)} }
@@ -26,6 +31,7 @@ func iv(lo, hi *big.Int) Ival { return Ival{lo, hi} }
 
 func (a Ival) String() string { return fmt.Sprintf("[%s, %s]", a.Lo, a.Hi) }
 
+// within reports whether a lies inside [lo, hi].
 func (a Ival) within(lo, hi *big.Int) bool { return a.Lo.Cmp(lo) >= 0 && a.Hi.Cmp(hi) <= 0 }
 
 func (a Ival) fitsI64() bool { return a.within(i64Min, i64Max) }
@@ -71,14 +77,17 @@ func ivMul(a, b Ival) Ival {
 }
 func ivNeg(a Ival) Ival { return Ival{new(big.Int).Neg(a.Hi), new(big.Int).Neg(a.Lo)} }
 
+// ivNot returns ~a = −a − 1.
 func ivNot(a Ival) Ival {
 	return Ival{new(big.Int).Sub(new(big.Int).Neg(a.Hi), bigOne), new(big.Int).Sub(new(big.Int).Neg(a.Lo), bigOne)}
 }
 
+// pow2m1 returns 2^bitlen(x) − 1 (the upper bound of | and ^ over all values in [0, x]).
 func pow2m1(x *big.Int) *big.Int {
 	return new(big.Int).Sub(new(big.Int).Lsh(bigOne, uint(x.BitLen())), bigOne)
 }
 
+// ivBit returns the interval of & | ^. An operand that may be negative gives the whole i64 range (which fits in i64 — accepted).
 func ivBit(op string, a, b Ival) Ival {
 	switch op {
 	case "&":
@@ -106,14 +115,16 @@ func ivBit(op string, a, b Ival) Ival {
 	return fullI64
 }
 
+// floorDiv is Ruby's Integer#/ (rounding toward −∞).
 func floorDiv(x, d *big.Int) *big.Int {
-	q, m := new(big.Int).DivMod(x, d, new(big.Int))
-	if d.Sign() < 0 && m.Sign() != 0 {
+	q, m := new(big.Int).DivMod(x, d, new(big.Int)) // Euclidean: 0 ≤ m < |d|
+	if d.Sign() < 0 && m.Sign() != 0 {              // 7 / −2: Euclidean q = −3 (7 = 6 + 1), floor is −4
 		q.Sub(q, bigOne)
 	}
 	return q
 }
 
+// isPow2Mag reports whether |d| is a power of 2.
 func isPow2Mag(d *big.Int) bool {
 	a := new(big.Int).Abs(d)
 	return a.Sign() > 0 && new(big.Int).And(a, new(big.Int).Sub(a, bigOne)).Sign() == 0

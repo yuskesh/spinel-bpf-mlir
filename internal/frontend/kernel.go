@@ -7,20 +7,29 @@ import (
 	"strings"
 )
 
+// CO-RE (compile once, run everywhere — field offsets relocated at load time) kernel structs: `Task = Struct.new(:pid, …)` +
+// `BPF.kernel_type(Task, "task_struct", pid: :i32, real_parent: [:kptr, Task], comm: [:u8, 16])` + a sample handle
+// `TaskT = BPF::KernelType.new(Task.new(0, …))`. A tp_btf program `BPF.tp_btf :p, "tp", args: {0 => TaskT, 2 => :u32}` reads them
+// with `t = ctx.kptr(i, TaskT)`, `t.load.m` and `ctx.arg(i)`. Only the load-time check (bml, the bpf-mlir loader — its kfield / arg /
+// attach rows) guards that the widths, signs, names and N are right.
+
+// KernelField is one field read from a kernel struct (Kind: "int" / "kptr" / "array").
 type KernelField struct {
 	Name   string
 	Kind   string
 	Bits   int
 	Signed bool
-	Ptr    string
-	Count  int
+	Ptr    string // kptr: the Struct constant of the kernel_type it points to
+	Count  int    // array: the number of elements (8-bit elements)
 }
 
+// KernelTypeDecl is a BPF.kernel_type declaration.
 type KernelTypeDecl struct {
-	Const      string
-	Name       string
-	Fields     []KernelField
-	Pos        Pos
+	Const  string // the Struct constant
+	Name   string // the name of the kernel struct
+	Fields []KernelField
+	Pos    Pos
+	// lines the harness's keptSource keeps: the declarations of the Struct constant and of the sample handles
 	StructPos  Pos
 	HandlePoss []Pos
 }
@@ -34,13 +43,15 @@ func (k *KernelTypeDecl) field(name string) *KernelField {
 	return nil
 }
 
+// TpArg is one declaration in the args of a tp_btf program (a struct argument when KT is set, otherwise an integer — Type).
 type TpArg struct {
 	Idx  int
 	KT   *KernelTypeDecl
-	Type string
-	Null bool
+	Type string // the name of the integer type (:u32 and so on)
+	Null bool   // a nullable struct argument (`[:or_null, T]` — read with ctx.kptr_or_null and an if)
 }
 
+// rubyKeywords holds Ruby's reserved words (a kernel member with such a name cannot be a Struct accessor — a named error).
 var rubyKeywords = map[string]bool{
 	"BEGIN": true, "END": true, "alias": true, "and": true, "begin": true, "break": true, "case": true, "class": true, "def": true, "defined?": true,
 	"do": true, "else": true, "elsif": true, "end": true, "ensure": true, "false": true, "for": true, "if": true, "in": true, "module": true, "next": true,
@@ -50,6 +61,8 @@ var rubyKeywords = map[string]bool{
 
 var lowerIdent = regexp.MustCompile(`^[a-z_][a-z0-9_]*$`)
 
+// kernelTypeDecl reads a top-level `BPF.kernel_type(S, "name", m: type, …)` (errors are SB033). kernelTypesResolve resolves what the
+// pointers point to.
 func (z *analyzer) kernelTypeDecl(a *AST, n *Node, structs map[string]*structInfo, ptrs map[*KernelField]*Node) {
 	p := z.pos(a, n)
 	as := args(a, n)
@@ -92,7 +105,7 @@ func (z *analyzer) kernelTypeDecl(a *AST, n *Node, structs map[string]*structInf
 		f := KernelField{Name: name}
 		switch v.Type {
 		case "SymbolNode":
-			if v.Str["value"] == "strptr" {
+			if v.Str["value"] == "strptr" { // a char * field — the kernel string behind it is read with `R.output_str(…, q.str(:m), …)`
 				f.Kind, f.Bits = "strptr", 64
 				break
 			}
@@ -111,8 +124,8 @@ func (z *analyzer) kernelTypeDecl(a *AST, n *Node, structs map[string]*structInf
 			switch {
 			case els[0].Str["value"] == "kptr" && els[1].Type == "ConstantReadNode":
 				f.Kind, f.Ptr, f.Bits = "kptr", els[1].Str["name"], 64
-				ptrs[&f] = els[1]
-			case els[0].Str["value"] == "struct" && els[1].Type == "ConstantReadNode":
+				ptrs[&f] = els[1] // resolved after all declarations (it may point to itself or to a later declaration)
+			case els[0].Str["value"] == "struct" && els[1].Type == "ConstantReadNode": // a struct embedded by value (read through the path t.load.a.m)
 				f.Kind, f.Ptr = "struct", els[1].Str["name"]
 			case (els[0].Str["value"] == "u8" || els[0].Str["value"] == "i8") && els[1].Type == "IntegerNode":
 				nb, ok := z.literal(a, els[1])
@@ -144,6 +157,8 @@ func (z *analyzer) kernelTypeDecl(a *AST, n *Node, structs map[string]*structInf
 	z.ktOrder = append(z.ktOrder, d)
 }
 
+// kernelTypesResolve checks that what a pointer field points to (`[:kptr, S]`) is a kernel_type (an error is SB033 and drops the
+// declaration).
 func (z *analyzer) kernelTypesResolve(a *AST, ptrs map[*KernelField]*Node) {
 	for _, d := range append([]*KernelTypeDecl(nil), z.ktOrder...) {
 		for i := range d.Fields {
@@ -152,7 +167,7 @@ func (z *analyzer) kernelTypesResolve(a *AST, ptrs map[*KernelField]*Node) {
 				continue
 			}
 			if z.kts[f.Ptr] == nil {
-				if f.Kind == "struct" {
+				if f.Kind == "struct" { // an embedded struct
 					z.add(Rejected, SB033KernelTypeShape, d.Pos, "member %s of %s embeds %s, which is not declared with BPF.kernel_type", f.Name, d.Const, f.Ptr)
 				} else {
 					z.add(Rejected, SB033KernelTypeShape, d.Pos, "member %s of %s points to %s, which is not declared with BPF.kernel_type", f.Name, d.Const, f.Ptr)
@@ -161,6 +176,8 @@ func (z *analyzer) kernelTypesResolve(a *AST, ptrs map[*KernelField]*Node) {
 			}
 		}
 	}
+	// A cycle of by-value embeddings (of a struct in itself, or mutual) has no defined size — bpf-mlir's schema rejects it too.
+	// Pointer cycles are still allowed, as before
 	for _, d := range append([]*KernelTypeDecl(nil), z.ktOrder...) {
 		if z.kts[d.Const] == nil {
 			continue
@@ -180,6 +197,8 @@ func (z *analyzer) kernelTypesResolve(a *AST, ptrs map[*KernelField]*Node) {
 	_ = ptrs
 }
 
+// kernelHandleDecl reads `H = BPF::KernelType.new(S.new(0, …))` (a sample handle — integer and pointer members are 0, arrays are
+// Array.new(N, 0)).
 func (z *analyzer) kernelHandleDecl(a *AST, n *Node) {
 	v := a.ref(n, "value")
 	h := n.Str["name"]
@@ -201,7 +220,7 @@ func (z *analyzer) kernelHandleDecl(a *AST, n *Node) {
 	}
 	for i, x := range sas {
 		f := d.Fields[i]
-		if f.Kind == "struct" {
+		if f.Kind == "struct" { // the sample of an embedded struct is a nested `T.new(0, …)` (every member a sample value)
 			if !z.embedSample(a, x, f.Ptr) {
 				z.add(Rejected, SB033KernelTypeShape, z.pos(a, x), "the sample of the embedded struct member %s is `%s.new(0, …)` with every member's sample", f.Name, f.Ptr)
 				return
@@ -222,7 +241,7 @@ func (z *analyzer) kernelHandleDecl(a *AST, n *Node) {
 			}
 			continue
 		}
-		if f.Kind == "strptr" {
+		if f.Kind == "strptr" { // the sample of a char * member is the empty string (so Spinel infers String)
 			if x.Type != "StringNode" || x.Str["content"] != "" {
 				z.add(Rejected, SB033KernelTypeShape, z.pos(a, x), "the sample of the :strptr member %s is the empty String literal \"\"", f.Name)
 				return
@@ -242,10 +261,14 @@ func (z *analyzer) kernelHandleDecl(a *AST, n *Node) {
 	d.HandlePoss = append(d.HandlePoss, z.pos(a, n))
 }
 
+// tpBtfDecl reads `BPF.tp_btf :name, "tracepoint", args: {i => H | :u32, …}` (errors are SB033, at the declaration).
 func (z *analyzer) tpBtfDecl(a *AST, n *Node, as []*Node) (rootDecl, bool) {
 	return z.structArgsDecl(a, n, as, "tp_btf")
 }
 
+// structArgsDecl reads `BPF.tp_btf … args:` and `BPF.fentry … args:`. A fentry struct argument is only `[:or_null, T]`: a fentry
+// kernel pointer may always be NULL (fentry arguments are plain pointers and BTF does not say whether a function argument can be
+// NULL, so bpf-mlir always types them as nullable), and integer arguments are not read.
 func (z *analyzer) structArgsDecl(a *AST, n *Node, as []*Node, kind string) (rootDecl, bool) {
 	bad := func(format string, x ...any) (rootDecl, bool) {
 		z.add(Rejected, SB033KernelTypeShape, z.pos(a, n), format, x...)
@@ -282,7 +305,7 @@ func (z *analyzer) structArgsDecl(a *AST, n *Node, as []*Node, kind string) (roo
 		}
 		i := int(nb.Int64())
 		seen[i] = true
-		if kind == "fentry" && v.Type == "ConstantReadNode" {
+		if kind == "fentry" && v.Type == "ConstantReadNode" { // integer arguments are accepted — a struct stays always nullable
 			return bad("argument %d: a fentry struct argument is always nullable — declare it `%d => [:or_null, T]` and read it with `q = ctx.kptr_or_null(%d, T)` and `if q` (an integer argument is `%d => :u32` etc., read with `ctx.arg(%d)`)", i, i, i, i, i)
 		}
 		switch v.Type {
@@ -297,7 +320,7 @@ func (z *analyzer) structArgsDecl(a *AST, n *Node, as []*Node, kind string) (roo
 				return bad("argument %d: an integer argument's type is one of :i8 … :i64 / :u8 … :u64", i)
 			}
 			r.TArgs = append(r.TArgs, TpArg{Idx: i, Type: v.Str["value"]})
-		case "ArrayNode":
+		case "ArrayNode": // `[:or_null, T]`
 			els := a.arr(v, "elements")
 			if len(els) != 2 || els[0].Type != "SymbolNode" || els[0].Str["value"] != "or_null" || els[1].Type != "ConstantReadNode" || z.ktHandles[els[1].Str["name"]] == nil {
 				return bad("argument %d: a nullable struct argument is `[:or_null, T]` with T a kernel struct's sample handle", i)
@@ -310,6 +333,7 @@ func (z *analyzer) structArgsDecl(a *AST, n *Node, as []*Node, kind string) (roo
 	return r, true
 }
 
+// tpArg returns the declaration of argument i in the program's args (nil if there is none).
 func (p *Program) tpArg(i int) *TpArg {
 	for k := range p.TArgs {
 		if p.TArgs[k].Idx == i {
@@ -319,15 +343,20 @@ func (p *Program) tpArg(i int) *TpArg {
 	return nil
 }
 
+// kptrCall reports whether v is the CallNode of `ctx.kptr(i, H)` / `ctx.kptr_or_null(i, H)`.
 func (c *progCtx) kptrCall(v *Node) bool {
 	if v != nil && v.Type == "CallNode" && (v.Str["name"] == "state" || v.Str["name"] == "skb") && c.isVarRead(c.a.ref(v, "receiver"), c.param) && c.prog.Kind == "netfilter" {
-		return true
+		return true // netfilter: `st = ctx.state(T)` / `sk = ctx.skb(T)`
 	}
 	return v != nil && v.Type == "CallNode" && (v.Str["name"] == "kptr" || v.Str["name"] == "kptr_or_null") && c.isVarRead(c.a.ref(v, "receiver"), c.param) && c.prog.Kind == "tp_btf"
 }
 
+// nfPtrs maps each pointer field of netfilter's bpf_nf_ctx to the kernel struct it points to (the eighth column, `btf`, of bpf-mlir's
+// context-access table).
 var nfPtrs = map[string]string{"state": "nf_hook_state", "skb": "sk_buff"}
 
+// nfBind reads `st = ctx.state(T)` / `sk = ctx.skb(T)` at the program's top level: Stmt "kptr" (Var, Path is the field, KT). The
+// name of T's kernel struct must be the one in the table.
 func (c *progCtx) nfBind(w, v *Node, name string) (Stmt, bool) {
 	field := v.Str["name"]
 	callee, ok := c.callee(v)
@@ -356,6 +385,7 @@ func (c *progCtx) nfBind(w, v *Node, name string) (Stmt, bool) {
 	return Stmt{Kind: "kptr", Var: name, Path: field, KT: h, Pos: c.z.pos(c.a, w)}, true
 }
 
+// kptrBind reads `t = ctx.kptr(i, H)` at the program's top level: Stmt "kptr" (Var t, Len i, KT).
 func (c *progCtx) kptrBind(w *Node, top bool) (Stmt, bool) {
 	name := w.Str["name"]
 	v := c.a.ref(w, "value")
@@ -383,7 +413,10 @@ func (c *progCtx) kptrBind(w *Node, top bool) (Stmt, bool) {
 		c.add(Rejected, SB033KernelTypeShape, v, "`%s.kptr(i, T)` takes an Integer literal index and a kernel struct's sample handle", c.param)
 		return Stmt{}, false
 	}
-	nb, _ := c.z.literal(c.a, as[0])
+	nb, ok := c.z.literal(c.a, as[0])
+	if !ok { // literal has added SB001 or SB014
+		return Stmt{}, false
+	}
 	i := int(nb.Int64())
 	ta := c.prog.tpArg(i)
 	h := c.z.ktHandles[as[1].Str["name"]]
@@ -405,11 +438,12 @@ func (c *progCtx) kptrBind(w *Node, top bool) (Stmt, bool) {
 	return Stmt{Kind: "kptr", Var: name, Len: int64(i), KT: ta.KT, Pos: c.z.pos(c.a, w)}, true
 }
 
+// kfieldRead lowers `t.load.m` (an integer field). n is the CallNode of `.m` and recv is `t.load`.
 func (c *progCtx) kfieldRead(n, recv *Node, p Pos) *Expr {
 	t := c.a.ref(recv, "receiver").Str["name"]
 	d := c.kptrs[t]
 	f := d.field(n.Str["name"])
-	if f == nil {
+	if f == nil { // check the declared members first (Spinel resolves no callee for an undeclared member — say so about the declaration rather than SB004)
 		c.add(Rejected, SB033KernelTypeShape, n, "%s (%s) declares no member `%s` — declare the members it reads in BPF.kernel_type", d.Const, d.Name, n.Str["name"])
 		return nil
 	}
@@ -429,10 +463,10 @@ func (c *progCtx) kfieldRead(n, recv *Node, p Pos) *Expr {
 	case f.Kind == "array":
 		c.add(Rejected, SB033KernelTypeShape, n, "member %s is a byte array — copy it into a record's byte-array member with `r.load.<member> = %s.copy(:%s)`", f.Name, t, f.Name)
 		return nil
-	case f.Kind == "struct":
+	case f.Kind == "struct": // an embedded struct is not a value — its integer members are read through a path
 		c.add(Rejected, SB033KernelTypeShape, n, "member %s is an embedded struct — read its integer members as `%s.load.%s.m`", f.Name, t, f.Name)
 		return nil
-	case f.Kind == "strptr":
+	case f.Kind == "strptr": // a char * value (a kernel address) is never turned into an integer
 		c.add(Rejected, SB033KernelTypeShape, n, "member %s is a :strptr (char *) — read the string it points to with `R.output_str(…, %s.str(:%s), …)`, not its address", f.Name, t, f.Name)
 		return nil
 	}
@@ -446,6 +480,7 @@ func (c *progCtx) kfieldRead(n, recv *Node, p Pos) *Expr {
 	return e
 }
 
+// kptrMisuse reports SB033 for any other use of a kernel-pointer local (as a value, `t.load` as a value, ptr / copy).
 func (c *progCtx) kptrMisuse(n *Node, name string) {
 	switch {
 	case n.Type == "CallNode" && n.Str["name"] == "ptr":
@@ -459,6 +494,7 @@ func (c *progCtx) kptrMisuse(n *Node, name string) {
 	}
 }
 
+// kernelTypesSchema builds the schema's core.kernel_types (in declaration order).
 func kernelTypesSchema(res *Result) []schemaKernelType {
 	var out []schemaKernelType
 	for _, d := range res.KernelTypes {
@@ -472,9 +508,9 @@ func kernelTypesSchema(res *Result) []schemaKernelType {
 				t = schemaKPtr{"kptr", res.ktName(f.Ptr)}
 			case "array":
 				t = schemaArray{Kind: "array", Count: f.Count, Element: schemaInt{"int", 8, f.Signed, "little", 1}}
-			case "strptr":
+			case "strptr": // char *
 				t = schemaUserStr{"strptr"}
-			case "struct":
+			case "struct": // embedded struct
 				t = schemaKStruct{"struct", res.ktName(f.Ptr)}
 			}
 			kt.Fields = append(kt.Fields, schemaKField{Name: f.Name, Type: t})
@@ -484,6 +520,7 @@ func kernelTypesSchema(res *Result) []schemaKernelType {
 	return out
 }
 
+// ktName returns the kernel struct name of a Struct constant.
 func (res *Result) ktName(c string) string {
 	for _, d := range res.KernelTypes {
 		if d.Const == c {
@@ -493,6 +530,7 @@ func (res *Result) ktName(c string) string {
 	return c
 }
 
+// tpArgsSchema builds program.args (a positional array — a kernel_type name, an integer type, or null for an argument not read).
 func tpArgsSchema(p *Program) []any {
 	n := 0
 	for _, a := range p.TArgs {
@@ -513,10 +551,12 @@ func tpArgsSchema(p *Program) []any {
 	return out
 }
 
+// isKptrRead reports whether n reads a kernel-pointer local.
 func (c *progCtx) isKptrRead(n *Node) bool {
 	return n != nil && n.Type == "LocalVariableReadNode" && c.kptrs[n.Str["name"]] != nil
 }
 
+// topLevel reports whether statement n sits directly in the program's body (an element of the def's StatementsNode).
 func (c *progCtx) topLevel(n *Node) bool {
 	p := c.a.node(c.a.Parent[n.ID])
 	if p == nil || p.Type != "StatementsNode" {
@@ -525,6 +565,9 @@ func (c *progCtx) topLevel(n *Node) bool {
 	return c.a.node(c.a.Parent[p.ID]) == c.def
 }
 
+// noTpBtf returns an error for a Result that has a tp_btf program (tp_btf support in the twin and kernel harnesses — the tp_btf
+// attach and the fork trigger — was left to later work; the twin is the user-space Ruby copy of the program that the harness runs).
+// It never silently builds another shape instead.
 func noTpBtf(res *Result) error {
 	for _, p := range res.Programs {
 		if p.Kind == "tp_btf" {
@@ -534,10 +577,13 @@ func noTpBtf(res *Result) error {
 	return nil
 }
 
+// usesKernelTypes reports whether the program reads kernel structs (tp_btf, or fentry with args).
 func usesKernelTypes(p *Program) bool {
 	return p != nil && (p.Kind == "tp_btf" || (p.Kind == "fentry" && len(p.TArgs) > 0))
 }
 
+// hasTpBtf reports whether some program reads kernel structs (tp_btf, or fentry with args); it is the trigger for the harness's
+// fork, pi and comm helpers.
 func hasTpBtf(res *Result) bool {
 	for _, p := range res.Programs {
 		if usesKernelTypes(p) {
@@ -547,6 +593,11 @@ func hasTpBtf(res *Result) bool {
 	return false
 }
 
+// tpBtfTwinRun writes the twin's `run <prog> [a<i>.<m>=<v> …] [a<i>=<v> …]`: for each declared struct argument i it builds the
+// kernel_type's Struct from the member values (0 when not given — pointer members are 0, arrays are Array.new(N, 0)) and wraps it in
+// a KPtr; integer arguments are truncated to the width of their declared type. A name that is not declared stops the run.
+// `a<i>=null` makes a nullable struct argument NULL (nil); `a<i>.<m>=present` makes the target of pointer member m present (its
+// values are `a<i>.<m>.<f>=<v>` — the target's own pointers are NULL); a pointer member that is not given is NULL.
 func tpBtfTwinRun(kw string, p *Program, kts []*KernelTypeDecl) string {
 	byConst := map[string]*KernelTypeDecl{}
 	for _, d := range kts {
@@ -562,9 +613,9 @@ func tpBtfTwinRun(kw string, p *Program, kts []*KernelTypeDecl) string {
 		if a.KT == nil {
 			continue
 		}
-		q(fmt.Sprintf("a%d@addr", a.Idx))
+		q(fmt.Sprintf("a%d@addr", a.Idx)) // the address of the twin's kernel pointer (`t.addr` — only the kernel knows the value; the harness supplies it)
 		for _, f := range a.KT.Fields {
-			if f.Kind == "struct" {
+			if f.Kind == "struct" { // the members of an embedded struct are a<i>.<m>.<n> (a path)
 				twinEmbedKeys(byConst, f.Ptr, fmt.Sprintf("a%d.%s", a.Idx, f.Name), q)
 				continue
 			}
@@ -587,7 +638,7 @@ func tpBtfTwinRun(kw string, p *Program, kts []*KernelTypeDecl) string {
 		}
 		v := fmt.Sprintf("_h_kp%d", a.Idx)
 		twinKPtr(&b, v, a.KT, fmt.Sprintf("a%d", a.Idx), "        ", byConst)
-		fmt.Fprintf(&b, "        %s.set_addr(_h_fv(_h_n, _h_v, %q))\n", v, fmt.Sprintf("a%d@addr", a.Idx))
+		fmt.Fprintf(&b, "        %s.set_addr(_h_fv(_h_n, _h_v, %q))\n", v, fmt.Sprintf("a%d@addr", a.Idx)) // the address for `t.addr`
 		for _, f := range a.KT.Fields {
 			if f.Kind == "kptr" {
 				key := fmt.Sprintf("a%d.%s", a.Idx, f.Name)
@@ -603,8 +654,8 @@ func tpBtfTwinRun(kw string, p *Program, kts []*KernelTypeDecl) string {
 		idx = append(idx, fmt.Sprint(a.Idx))
 	}
 	ctx := fmt.Sprintf("BPF::TpBtfCtx.new(_h_ks, [%s], _h_ints)", strings.Join(idx, ", "))
-	if p.Kind == "fentry" {
-		ctx = fmt.Sprintf("BPF::FentryCtx.new(_h_ks, [%s], _h_ints)", strings.Join(idx, ", "))
+	if p.Kind == "fentry" { // fentry with struct arguments
+		ctx = fmt.Sprintf("BPF::FentryCtx.new(_h_ks, [%s], _h_ints)", strings.Join(idx, ", ")) // integer arguments too
 		if len(kps) == 0 {
 			ctx = "BPF::FentryCtx.new(nil, nil, _h_ints)"
 		}
@@ -613,11 +664,13 @@ func tpBtfTwinRun(kw string, p *Program, kts []*KernelTypeDecl) string {
 	return b.String()
 }
 
+// twinKPtr makes v the KPtr of a twin's kernel struct value (`S.new(…)` — integer members take the value of `<pre>.<m>`, pointers are
+// 0, arrays are Array.new(N, 0); an array member then gets the bytes of `<pre>.<m>=<hex>` through set_arr — the source of t.copy).
 func twinKPtr(b *strings.Builder, v string, d *KernelTypeDecl, pre, ind string, byConst map[string]*KernelTypeDecl) {
 	var vs []string
 	for _, f := range d.Fields {
 		switch f.Kind {
-		case "struct":
+		case "struct": // an embedded struct is a nested S.new(…) (its members take the values of <pre>.<m>.<n>)
 			vs = append(vs, twinKStruct(byConst, f.Ptr, pre+"."+f.Name))
 		case "int":
 			vs = append(vs, widthCut(fmt.Sprintf("_h_fv(_h_n, _h_v, %q)", pre+"."+f.Name), intTypeName(f.Bits, f.Signed)))
@@ -625,7 +678,7 @@ func twinKPtr(b *strings.Builder, v string, d *KernelTypeDecl, pre, ind string, 
 			vs = append(vs, "0")
 		case "array":
 			vs = append(vs, fmt.Sprintf("Array.new(%d, 0)", f.Count))
-		case "strptr":
+		case "strptr": // the sample value is "" (the string's bytes come through set_str)
 			vs = append(vs, "\"\"")
 		}
 	}
@@ -640,6 +693,7 @@ func twinKPtr(b *strings.Builder, v string, d *KernelTypeDecl, pre, ind string, 
 	}
 }
 
+// intTypeName returns the type name for a width and signedness (a type for widthCut).
 func intTypeName(bits int, signed bool) string {
 	if signed {
 		return fmt.Sprintf("i%d", bits)
@@ -647,12 +701,14 @@ func intTypeName(bits int, signed bool) string {
 	return fmt.Sprintf("u%d", bits)
 }
 
+// schemaNullStruct is a nullable struct argument in args (`{"kind": "struct", "name": S, "nullable": true}`).
 type schemaNullStruct struct {
 	Kind     string `json:"kind"`
 	Name     string `json:"name"`
 	Nullable bool   `json:"nullable"`
 }
 
+// kcheckCall reports whether v is the CallNode of `ctx.kptr_or_null(i, T)` or `t.ptr(:m, T)` (t a kernel-pointer local).
 func (c *progCtx) kcheckCall(v *Node) bool {
 	if v == nil || v.Type != "CallNode" {
 		return false
@@ -663,6 +719,8 @@ func (c *progCtx) kcheckCall(v *Node) bool {
 	return v.Str["name"] == "ptr" && c.isKptrRead(c.a.ref(v, "receiver"))
 }
 
+// kcheckStmt reads `q = ctx.kptr_or_null(i, T)` / `rp = t.ptr(:m, T)` and the `if q … [else …] end` right after it: Stmt "kcheck".
+// Only inside then is q a kernel pointer (`q.load.m`, `q.ptr(…)`); it cannot be read in else or outside the if.
 func (c *progCtx) kcheckStmt(w, ifn *Node, refVar string) (Stmt, bool) {
 	name := w.Str["name"]
 	v := c.a.ref(w, "value")
@@ -689,7 +747,10 @@ func (c *progCtx) kcheckStmt(w, ifn *Node, refVar string) (Stmt, bool) {
 			c.add(Rejected, SB033KernelTypeShape, v, "`%s.kptr_or_null(i, T)` takes an Integer literal index and a kernel struct's sample handle", c.param)
 			return Stmt{}, false
 		}
-		nb, _ := c.z.literal(c.a, as[0])
+		nb, ok := c.z.literal(c.a, as[0])
+		if !ok { // literal has added SB001 or SB014
+			return Stmt{}, false
+		}
 		i := int(nb.Int64())
 		ta := c.prog.tpArg(i)
 		h := c.z.ktHandles[as[1].Str["name"]]
@@ -764,6 +825,7 @@ func (c *progCtx) kcheckStmt(w, ifn *Node, refVar string) (Stmt, bool) {
 	return s, true
 }
 
+// kcheckedRoot returns the name of the root of the call chain n when that root is a nullable kernel-pointer local used outside then.
 func (c *progCtx) kcheckedRoot(n *Node) string {
 	for n != nil && n.Type == "CallNode" {
 		n = c.a.ref(n, "receiver")
@@ -774,6 +836,9 @@ func (c *progCtx) kcheckedRoot(n *Node) string {
 	return ""
 }
 
+// kcopyStmt reads `r.load.m = t.copy(:f)`: it copies a fixed N bytes from field f of a kernel struct (an array of N 8-bit elements)
+// to member m of a borrowed record (an array of the same N 8-bit elements) (ebpf.kfield.copy — it does not interpret NUL). Only the
+// load-time check (`kfield … [N]i8`) guards that N is right.
 func (c *progCtx) kcopyStmt(n, cp *Node, ref string, m *MapDecl, rf *RecordField) (Stmt, bool) {
 	t := c.a.ref(cp, "receiver").Str["name"]
 	d := c.kptrs[t]
@@ -808,8 +873,12 @@ func (c *progCtx) kcopyStmt(n, cp *Node, ref string, m *MapDecl, rf *RecordField
 	return Stmt{Kind: "kcopy", Var: ref, Map: m, Field: rf, Path: kf.Name, PtrOf: t, PtrOfKT: d, Pos: c.z.pos(c.a, n)}, true
 }
 
+// nfTwinMembers lists the members a netfilter twin can give values to (state's hook / pf come from the run's arguments, skb's len
+// from the frame length).
 var nfTwinMembers = map[string]map[string]bool{"nf_hook_state": {"hook": true, "pf": true}, "sk_buff": {"len": true}}
 
+// nfTwinCheck, for a Result with a netfilter program, makes it an error to declare an nf_hook_state / sk_buff member the twin cannot
+// give a value to (a value it cannot model is never silently 0).
 func nfTwinCheck(res *Result) error {
 	any := false
 	for _, p := range res.Programs {
@@ -832,10 +901,14 @@ func nfTwinCheck(res *Result) error {
 	return nil
 }
 
+// nfTwinRun writes a netfilter twin's run (`run <prog> <hex> <hook> <pf>`): it builds twins (KPtr) of the declared nf_hook_state /
+// sk_buff and puts them in an NfCtx. skb's len is the frame length for LOCAL_OUT (3) and the frame length − 14 for any other hook
+// (in the kernel's netfilter test run, a hook other than LOCAL_OUT needs an Ethernet header, and eth_type_trans pulls its 14 bytes —
+// read in the 7.1.8 source and measured on 7.1.8). A struct that is not declared is nil.
 func nfTwinRun(kw string, p *Program, kts []*KernelTypeDecl) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "      %s _h_f[1] == %q\n        _h_d = _h_hex(_h_f[2])\n        _h_hk = _h_f[3].to_i\n        _h_pf = _h_f[4].to_i\n        _h_len = _h_d.length\n", kw, p.Name)
-	if !mutation("nf-len-l2") {
+	if !mutation("nf-len-l2") { // mutation: the twin's len is n whatever the hook
 		b.WriteString("        if _h_hk != 3\n          _h_len = _h_d.length - 14\n        end\n")
 	}
 	vals := map[string]string{"hook": "_h_hk", "pf": "_h_pf", "len": "_h_len"}
@@ -856,6 +929,7 @@ func nfTwinRun(kw string, p *Program, kts []*KernelTypeDecl) string {
 	return b.String()
 }
 
+// embedCycle follows the [:struct, S] embeddings from c and returns a path that comes back to c ("A -> B -> A"), or "" if none does.
 func (z *analyzer) embedCycle(c string, seen map[string]bool) string {
 	var walk func(cur string, path []string) string
 	walk = func(cur string, path []string) string {
@@ -882,16 +956,21 @@ func (z *analyzer) embedCycle(c string, seen map[string]bool) string {
 	return walk(c, []string{c})
 }
 
+// schemaKStruct is the type of a kernel_types field that embeds a struct by value (bpf-mlir's schema `{kind: struct, struct: T}`).
 type schemaKStruct struct {
 	Kind   string `json:"kind"`
 	Struct string `json:"struct"`
 }
 
+// kpathRead lowers `t.load.a.b` / `t.load.a.b.c` (an integer read through a path of embedded structs — a path in bpf-mlir's
+// kfield.load). n is the CallNode of the last step. The intermediate steps must be [:struct, S] members and the last an integer
+// member; a path has 2 or 3 steps (one step is kfieldRead).
+// When n is not such a path (it does not reach t.load), it returns nil, false.
 func (c *progCtx) kpathRead(n *Node, p Pos) (*Expr, bool) {
 	var segs []*Node
 	cur := n
 	for cur != nil && cur.Type == "CallNode" && cur.Str["name"] != "load" {
-		if !memberLike(cur.Str["name"]) {
+		if !memberLike(cur.Str["name"]) { // an operator (`t.load.m & 1`, `==`) or an object method is not a path step — read as before (fixes a regression in the negative examples)
 			return nil, false
 		}
 		segs = append([]*Node{cur}, segs...)
@@ -950,6 +1029,8 @@ func (c *progCtx) kpathRead(n *Node, p Pos) (*Expr, bool) {
 	return nil, true
 }
 
+// twinEmbedKeys gives the names of the integer members of an embedded struct that the twin harness accepts (`<pre>.<n>` — nested
+// structs recursively).
 func twinEmbedKeys(byConst map[string]*KernelTypeDecl, c, pre string, q func(string)) {
 	d := byConst[c]
 	if d == nil {
@@ -965,6 +1046,8 @@ func twinEmbedKeys(byConst map[string]*KernelTypeDecl, c, pre string, q func(str
 	}
 }
 
+// twinKStruct returns the twin's value of an embedded struct, `S.new(…)` (integer members take the value of `<pre>.<m>`, other
+// members the sample's 0 / empty value).
 func twinKStruct(byConst map[string]*KernelTypeDecl, c, pre string) string {
 	d := byConst[c]
 	if d == nil {
@@ -988,6 +1071,8 @@ func twinKStruct(byConst map[string]*KernelTypeDecl, c, pre string) string {
 	return fmt.Sprintf("%s.new(%s)", d.Const, strings.Join(vs, ", "))
 }
 
+// embedSample reports whether x is a sample `C.new(…)` of the embedded struct c (integers and pointers are the literal 0, arrays are
+// Array.new(N, 0), :strptr is "", nested structs recursively).
 func (z *analyzer) embedSample(a *AST, x *Node, c string) bool {
 	d := z.kts[c]
 	if d == nil || x.Type != "CallNode" || x.Str["name"] != "new" || constName(a, a.ref(x, "receiver")) != c {
@@ -1030,6 +1115,8 @@ func (z *analyzer) embedSample(a *AST, x *Node, c string) bool {
 	return true
 }
 
+// kptrPathRecv reports whether recv is an embedded path from a kernel pointer (`t.load.a` / `t.load.a.b` — one or more intermediate
+// steps); it is used to check writes to a path.
 func (c *progCtx) kptrPathRecv(recv *Node) bool {
 	segs := 0
 	cur := recv

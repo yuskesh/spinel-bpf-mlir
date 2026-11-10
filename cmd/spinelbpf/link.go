@@ -12,6 +12,9 @@ import (
 	"github.com/yuskesh/spinel-bpf-mlir/internal/frontend"
 )
 
+// reuseCommitted uses the committed artefacts when the ebpf-compile tools are missing (as in a fresh clone). Only when the
+// regenerated .mlir, schema and maps.json are byte-identical and the ELF and the embedding object exist (otherwise it
+// stops — never silently use a stale ELF).
 func reuseCommitted(r *BuildResult, dir, name string, out *frontend.Output) (*BuildResult, error) {
 	for _, f := range []struct {
 		name string
@@ -27,6 +30,7 @@ func reuseCommitted(r *BuildResult, dir, name string, out *frontend.Output) (*Bu
 			return r, fmt.Errorf("ebpf-compile is not available and %s is missing — run scripts/setup.sh", f)
 		}
 	}
+	// ebpf-compile's verbatim stderr from rc 0 (stop if it is missing: do not silently assume there were no warnings)
 	cw, err := os.ReadFile(filepath.Join(dir, name+".compile_warnings.txt"))
 	if err != nil {
 		return r, fmt.Errorf("ebpf-compile is not available and %s.compile_warnings.txt is missing — run scripts/setup.sh (the committed warnings of the ELF are part of the generated artefacts)", name)
@@ -38,6 +42,8 @@ func reuseCommitted(r *BuildResult, dir, name string, out *frontend.Output) (*Bu
 	return r, nil
 }
 
+// Link uses Spinel to make one executable from the user's program, the C loader's archives (the production ones — no test
+// caps) and the embedding object, and checks its NEEDED entries against packaging/needed.allow.
 func Link(cfg Config, source, exe string) error {
 	abs, err := filepath.Abs(source)
 	if err != nil {
@@ -48,6 +54,7 @@ func Link(cfg Config, source, exe string) error {
 		return err
 	}
 	dir, name := filepath.Dir(abs), strings.TrimSuffix(filepath.Base(abs), ".rb")
+	// The C loader: after the version check (stop on a mismatch), the shim and the archives in bml's link order
 	if err := checkBMLVersions(cfg); err != nil {
 		return err
 	}
@@ -92,6 +99,7 @@ func readAllow(path string) (map[string]bool, error) {
 	return m, nil
 }
 
+// CheckNeeded checks that every NEEDED entry of the executable is in the allow list and that it has no RUNPATH / RPATH.
 func CheckNeeded(exe string, allow map[string]bool) error {
 	f, err := elf.Open(exe)
 	if err != nil {

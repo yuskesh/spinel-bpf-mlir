@@ -1,6 +1,6 @@
 require "bpf"
 
-
+# adjust_head inside a loop
 Out = BPF::ArrayMap.new("Out", :i64, 1)
 
 def p(ctx)

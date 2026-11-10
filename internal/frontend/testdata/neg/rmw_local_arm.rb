@@ -2,7 +2,7 @@ require "bpf"
 
 Out = BPF::ArrayMap.new("Out", :u32, 2)
 
-
+# A local that has the origin in only one if arm (the join is the union)
 def prog(ctx)
   x = 0
   p = Out.lookup(0)

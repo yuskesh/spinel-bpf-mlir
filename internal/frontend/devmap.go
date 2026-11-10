@@ -1,7 +1,15 @@
 package frontend
 
+// XDP redirect_map and devmap: `Ports = BPF::DevMap.new("Ports", :u32, n)` (the key is a u32 index and the value is an ifindex, which the
+// user side writes with `obj.map_put`), and `Ports.redirect(k, BPF::XDP_PASS)` as the last expression of an xdp program (bpf-mlir's
+// ebpf.redirect_map: XDP_REDIRECT when the entry exists, otherwise the fallback verdict). bpf-mlir rejects a devmap lookup, update and
+// the like inside a program (checkMapKind).
+
+// IsDevmap reports whether the map is a devmap.
 func (m *MapDecl) IsDevmap() bool { return m.Kind == "devmap" }
 
+// redirectVerdict checks `M.redirect(k, BPF::XDP_*)` as the last expression: M is a devmap, k an integer expression, and the fallback
+// an XDP verdict constant.
 func (c *progCtx) redirectVerdict(n, v *Node) {
 	if c.prog.Kind != "xdp" {
 		c.add(Rejected, SB028TracingKind, v, "`redirect` (bpf_redirect_map) ends only an XDP program — a %s program returns its own verdict", c.prog.Kind)

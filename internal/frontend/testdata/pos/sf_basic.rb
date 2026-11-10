@@ -1,6 +1,6 @@
 require "bpf"
 
-
+# socket_filter: __sk_buff's len into Out[0]; drop when it exceeds 64 (guard), otherwise accept all bytes
 Out = BPF::ArrayMap.new("Out", :u32, 1)
 
 def short_only(skb)

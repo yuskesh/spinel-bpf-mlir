@@ -3,7 +3,7 @@ require "bpf"
 Out = BPF::ArrayMap.new("Out", :u64, 8)
 H = BPF::HashMap.new("H", :u32, :u64, 16)
 
-
+# Reads in the loop body a window checked before the loop (a window cannot cross a loop)
 def prog(ctx)
   w = ctx.check(14, 8)
   if w

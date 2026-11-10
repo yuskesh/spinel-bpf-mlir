@@ -1,6 +1,6 @@
 require "bpf"
 
-
+# A field not in the table (ifindex) on the tc context
 Out = BPF::ArrayMap.new("Out", :u32, 1)
 
 def p(skb)

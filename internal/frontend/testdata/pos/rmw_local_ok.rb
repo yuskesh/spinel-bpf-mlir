@@ -1,6 +1,6 @@
 require "bpf"
 
-
+# Accepted shapes: a local derived from another map, a local derived from a different literal key, a local with no map origin; (added later) a record member atomic_add whose delta derives from another map
 S = Struct.new(:a, :b)
 BPF.record(S, a: :u32, b: :u32)
 Out = BPF::ArrayMap.new("Out", :u32, 4)

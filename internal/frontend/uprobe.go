@@ -9,10 +9,18 @@ import (
 	"strings"
 )
 
+// uprobe (a probe on a user-space function): `BPF.uprobe :name, "<path>", "<symbol>", params: {n => :type | :user_str}`.
+// The path is relative to the source's directory, or a clean absolute path (a system library). The build reads the file and
+// puts its SHA-256 in the schema's binary_sha256 (the path itself is not put in the outputs — the outputs must be reproducible).
+// Arguments are read with ctx.arg(n) (integers, and :ptr as a raw i64) and ctx.str_arg(n) (:user_str — only as the third
+// argument of RingBuf#output_str).
+
 const uprobeShape = "`BPF.uprobe :name, \"target/binary\", \"symbol\", params: {1 => :user_str, 2 => :i32}`"
 
+// uretprobeShape is the shape of a uretprobe declaration.
 const uretprobeShape = "`BPF.uretprobe :name, \"target/binary\", \"symbol\", ret: :i64`"
 
+// uprobeDecl reads a uprobe declaration (a wrong shape is SB008, at the declaration).
 func (z *analyzer) uprobeDecl(a *AST, n *Node, as []*Node, bad func(string, ...any) (rootDecl, bool)) (rootDecl, bool) {
 	if len(as) != 4 || as[0].Type != "SymbolNode" || as[1].Type != "StringNode" || as[2].Type != "StringNode" || as[3].Type != "KeywordHashNode" ||
 		as[1].Str["content"] == "" || as[2].Str["content"] == "" {
@@ -24,7 +32,7 @@ func (z *analyzer) uprobeDecl(a *AST, n *Node, as []*Node, bad func(string, ...a
 	path := as[1].Str["content"]
 	clean := filepath.Clean(path)
 	full := filepath.Join(z.srcDir, clean)
-	if filepath.IsAbs(path) {
+	if filepath.IsAbs(path) { // an absolute path to a system library (libc and so on) — only in clean form (no `..`, `.` or repeated `/`)
 		if clean != path {
 			return bad("the uprobe target %q must be a clean absolute path (no `.`, `..` or repeated `/`) or a path relative to the source's directory — the build reads it and puts only its SHA-256 in the schema", path)
 		}
@@ -41,12 +49,12 @@ func (z *analyzer) uprobeDecl(a *AST, n *Node, as []*Node, bad func(string, ...a
 		return bad("the uprobe target %q cannot be read: %v", path, err)
 	}
 	sum := sha256.Sum256(b)
-	kind := n.Str["name"]
+	kind := n.Str["name"] // "uprobe" or "uretprobe"
 	r := rootDecl{Name: as[0].Str["value"], Kind: kind, Pos: z.pos(a, n), Target: as[2].Str["content"], BinarySHA: hex.EncodeToString(sum[:]), BinaryPath: full}
 	if filepath.IsAbs(path) {
 		r.SysTarget = path
 	}
-	if kind == "uretprobe" {
+	if kind == "uretprobe" { // the only option is ret: (at return the argument registers are clobbered — so no params)
 		var rv *Node
 		for _, e := range a.arr(as[3], "elements") {
 			k, v := a.ref(e, "key"), a.ref(e, "value")
@@ -89,7 +97,7 @@ func (z *analyzer) uprobeDecl(a *AST, n *Node, as []*Node, bad func(string, ...a
 		if v != nil && v.Type == "SymbolNode" {
 			t = v.Str["value"]
 		}
-		if _, isInt := recordTypes[t]; !isInt && t != "user_str" && t != "ptr" && t != "user_buf" {
+		if _, isInt := recordTypes[t]; !isInt && t != "user_str" && t != "ptr" && t != "user_buf" { // :ptr (a raw i64, checked against DWARF as an 8-byte pointer of depth 1); :user_buf (the same check — read by output_buf)
 			return bad("a uprobe parameter type is one of :i8 … :i64 / :u8 … :u64, :user_str (a `const char *` — read with ctx.str_arg(n)), :ptr (a pointer's raw value as i64 — read with ctx.arg(n)) or :user_buf (a buffer — read with ctx.buf_arg(n) in R.output_buf)")
 		}
 		seenN[int(nb.Int64())] = true
@@ -98,6 +106,8 @@ func (z *analyzer) uprobeDecl(a *AST, n *Node, as []*Node, bad func(string, ...a
 	return r, true
 }
 
+// uprobeParam returns the declared param for the n (an Integer literal) of `ctx.arg(n)` / `ctx.str_arg(n)` (missing or not a
+// literal is SB028).
 func (c *progCtx) uprobeParam(n *Node, as []*Node) *KParam {
 	if len(as) != 1 || as[0].Type != "IntegerNode" {
 		c.add(Rejected, SB028TracingKind, n, "`%s.%s(n)` takes one Integer literal n — a declared parameter number", c.param, n.Str["name"])
@@ -116,27 +126,31 @@ func (c *progCtx) uprobeParam(n *Node, as []*Node) *KParam {
 	return nil
 }
 
+// isOutputStr reports whether n is `R.output_str(…)` (R is a ring buffer).
 func (c *progCtx) isOutputStr(n *Node) bool {
-	return n != nil && n.Type == "CallNode" && (n.Str["name"] == "output_str" || n.Str["name"] == "output_str_or_discard" || n.Str["name"] == "output_comm" || n.Str["name"] == "output_argv" || n.Str["name"] == "output_buf") && c.ringOf(c.a.ref(n, "receiver")) != nil
+	return n != nil && n.Type == "CallNode" && (n.Str["name"] == "output_str" || n.Str["name"] == "output_str_or_discard" || n.Str["name"] == "output_comm" || n.Str["name"] == "output_argv" || n.Str["name"] == "output_buf") && c.ringOf(c.a.ref(n, "receiver")) != nil // also the discarding variant, comm, argv and user_buf
 }
 
+// outputStrShape returns the text showing the shape of output_str (how to fix a wrong statement).
 func outputStrShape(r *RingDecl) string {
 	return fmt.Sprintf("`r = %s.output_str(%s.new(…), :<u8 array member>, ctx.str_arg(n), :<i64 status member>)` then `if r` (read `r.status` inside), or `_ = %s.output_str(…)`", r.Const, r.Record.Const, r.Const)
 }
 
+// outputStr checks `R.output_str(S.new(…), :field, ctx.str_arg(n), :status)` — Stmt "ostr" (Var is the result's local; "" means
+// `_ = …`).
 func (c *progCtx) outputStr(call *Node, name, refVar string) (Stmt, bool) {
-	if call.Str["name"] == "output_comm" {
+	if call.Str["name"] == "output_comm" { // the current task's comm
 		return c.outputComm(call, name, refVar)
 	}
-	if call.Str["name"] == "output_argv" {
+	if call.Str["name"] == "output_argv" { // the argv slots
 		return c.outputArgv(call, name, refVar)
 	}
-	if call.Str["name"] == "output_buf" {
+	if call.Str["name"] == "output_buf" { // a user buffer
 		return c.outputBuf(call, name, refVar)
 	}
 	r := c.ringOf(c.a.ref(call, "receiver"))
-	tpStr := c.prog.Kind == "tracepoint"
-	if sa := args(c.a, call); c.prog.Kind != "uprobe" && c.prog.Kind != "ksyscall" && !tpStr && !(len(sa) >= 3 && sa[2].Type == "CallNode" && sa[2].Str["name"] == "str") {
+	tpStr := c.prog.Kind == "tracepoint"                                                                                                                                    // a tracepoint's :user_str field (ctx.str_field)
+	if sa := args(c.a, call); c.prog.Kind != "uprobe" && c.prog.Kind != "ksyscall" && !tpStr && !(len(sa) >= 3 && sa[2].Type == "CallNode" && sa[2].Str["name"] == "str") { // a kernel string (q.str) in a kind that has kernel pointers (kptr); also ksyscall's str_arg
 		c.add(Rejected, SB028TracingKind, call, "`%s.%s` reads a user string (`ctx.str_arg(n)` in a uprobe or ksyscall program, `ctx.str_field(:f)` in a tracepoint program), or a kernel string (`q.str(:m)` — a :strptr member of a present kernel pointer)", r.Const, call.Str["name"])
 		return Stmt{}, false
 	}
@@ -144,7 +158,7 @@ func (c *progCtx) outputStr(call *Node, name, refVar string) (Stmt, bool) {
 	if !ok {
 		return Stmt{}, false
 	}
-	meth := call.Str["name"]
+	meth := call.Str["name"] // output_str or output_str_or_discard
 	if callee != "RingBuf#"+meth {
 		c.add(Rejected, SB011ShadowedName, call, "`%s` resolves to %s, not BPF::RingBuf#%s", meth, callee, meth)
 		return Stmt{}, false
@@ -179,17 +193,17 @@ func (c *progCtx) outputStr(call *Node, name, refVar string) (Stmt, bool) {
 		return Stmt{}, false
 	}
 	sa := as[2]
-	if sa.Type == "CallNode" && sa.Str["name"] == "str" {
+	if sa.Type == "CallNode" && sa.Str["name"] == "str" { // a kernel string
 		return c.outputKStr(call, as, r, meth, f, st, name, refVar)
 	}
-	if tpStr {
+	if tpStr { // a tracepoint's user string field
 		return c.outputTpStr(call, as, r, meth, f, st, name, refVar)
 	}
 	if sa.Type != "CallNode" || sa.Str["name"] != "str_arg" || !c.isVarRead(c.a.ref(sa, "receiver"), c.param) {
 		c.add(Rejected, SB028TracingKind, sa, "the third argument of output_str is `%s.str_arg(n)` itself (a user string is not a value on the eBPF side — not through a local)", c.param)
 		return Stmt{}, false
 	}
-	want := ctxClass[c.prog.Kind] + "#str_arg"
+	want := ctxClass[c.prog.Kind] + "#str_arg" // UprobeCtx#str_arg or KsyscallCtx#str_arg
 	if cs, ok := c.callee(sa); !ok || cs != want {
 		if ok {
 			c.add(Rejected, SB011ShadowedName, sa, "`str_arg` resolves to %s, not BPF::%s", cs, want)
@@ -209,6 +223,8 @@ func (c *progCtx) outputStr(call *Node, name, refVar string) (Stmt, bool) {
 	return os, ok
 }
 
+// outputStrMake is the shared second half of output_str (also used for kernel strings): the literal 0 of the status member,
+// record.make, and Stmt "ostr".
 func (c *progCtx) outputStrMake(call *Node, as []*Node, r *RingDecl, meth string, f, st *RecordField, name, refVar string) (Stmt, bool) {
 	mkn := as[0]
 	if mkn.Type == "CallNode" && mkn.Str["name"] == "new" && constName(c.a, c.a.ref(mkn, "receiver")) == r.Record.Const {
@@ -230,14 +246,16 @@ func (c *progCtx) outputStrMake(call *Node, as []*Node, r *RingDecl, meth string
 	c.usedRings[r] = true
 	op := ""
 	if meth == "output_str_or_discard" {
-		op = "discard"
+		op = "discard" // discard the event when read_str's status is < 0
 	}
 	return Stmt{Kind: "ostr", Op: op, Ring: r, Value: mk, Var: name, Path: f.Name, Field: st, Pos: c.z.pos(c.a, call)}, true
 }
 
+// outputStrCheck checks `r = R.output_str(…)` and the `if r … [else …] end` right after it: an "ostr" Stmt, and an "if" that
+// branches on the result's i1 local r. Only inside then can `r.status` (i64 — the result's local `r#status`) be read.
 func (c *progCtx) outputStrCheck(w, ifn *Node, refVar string) ([]Stmt, bool) {
 	name := w.Str["name"]
-	if v := c.a.ref(w, "value"); v != nil && v.Str["name"] == "output_argv" {
+	if v := c.a.ref(w, "value"); v != nil && v.Str["name"] == "output_argv" { // the success of up to 20 events is not folded into one value
 		c.add(Rejected, SB025DroppedEvent, w, "the result of output_argv is not bound — it emits up to 20 events (one per present argv slot), so write `_ = %s.output_argv(…)`", constName(c.a, c.a.ref(v, "receiver")))
 		return nil, false
 	}
@@ -260,7 +278,7 @@ func (c *progCtx) outputStrCheck(w, ifn *Node, refVar string) ([]Stmt, bool) {
 	pre := c.env
 	c.env = copyEnv(pre)
 	c.env[name+"#status"] = &varInfo{Iv: fullI64}
-	c.env[name+"#sent"] = &varInfo{Bool: true}
+	c.env[name+"#sent"] = &varInfo{Bool: true} // submitted (output_str got its reservation, which means it submitted)
 	c.ostrLive[name] = true
 	var then []*Node
 	if st := c.a.ref(ifn, "statements"); st != nil {
@@ -289,6 +307,7 @@ func (c *progCtx) outputStrCheck(w, ifn *Node, refVar string) ([]Stmt, bool) {
 	return []Stmt{s, {Kind: "if", Cond: cond, Then: thenS, Else: elseS, Pos: c.z.pos(c.a, ifn)}}, true
 }
 
+// ostrStatus reads `r.status` and `r.sent` (the result of output_str, inside then).
 func (c *progCtx) ostrStatus(n *Node, recv *Node, p Pos) *Expr {
 	name := recv.Str["name"]
 	m := n.Str["name"]
@@ -312,18 +331,21 @@ func (c *progCtx) ostrStatus(n *Node, recv *Node, p Pos) *Expr {
 	return &Expr{Kind: "var", Var: name + "#status", Iv: fullI64, Pos: p}
 }
 
+// outputStr lowers "ostr": uprobe.arg (user_str) → reserve → in if_reserved's present arm, record.make → store_record →
+// user.read_str (into the u8 array member) → store_field into the status member → submit. When the result has a local (Var),
+// if_reserved's results (i1, i64) — (true, status) when present, (false, 0) when absent — go to the env's Var and `Var#status`.
 func (l *lowerer) outputStr(s Stmt) error {
-	if s.Argv {
+	if s.Argv { // nested output_str, one per argv slot (argv.go)
 		return l.outputArgv(s)
 	}
 	rec := s.Ring.Record.MLIRType()
 	sv, lv := "", ssaVal{}
-	if s.Buf {
+	if s.Buf { // the uprobe's :user_buf argument and the length to read (outside the reservation — user.read clamps it as signed)
 		var err error
 		if lv, err = l.expr(s.BufLen); err != nil {
 			return err
 		}
-		if mutation("user-read-len-abs") {
+		if mutation("user-read-len-abs") { // mutation: use the absolute value of the length (only the negative-length rows change)
 			z, neg, m, sel := l.val(), l.val(), l.val(), l.val()
 			l.emit("%s = arith.constant 0 : %s %s", z, lv.ty, loc(s.Pos))
 			l.emit("%s = arith.cmpi slt, %s, %s : %s %s", neg, lv.name, z, lv.ty, loc(s.Pos))
@@ -333,14 +355,14 @@ func (l *lowerer) outputStr(s Stmt) error {
 		}
 		sv = l.val()
 		l.emit("%s = ebpf.uprobe.arg %%ctx %d : !ebpf.ctx<\"uprobe\"> -> !ebpf.user_buf %s", sv, s.Len, loc(s.Pos))
-	} else if s.StrSSA != "" {
+	} else if s.StrSSA != "" { // the string made by argv's str_at (emits no op)
 		sv = s.StrSSA
-	} else if s.TpStr != nil {
+	} else if s.TpStr != nil { // a tracepoint's :user_str field (the 8 bytes at the record offset — a copy of the declaration)
 		sv = l.val()
 		l.emit("%s = ebpf.tp.field %%ctx %q [%d] : !ebpf.ctx<\"tracepoint\"> -> !ebpf.user_str %s", sv, s.TpStr.Name, s.TpStr.Offset, loc(s.Pos))
-	} else if s.KStr == "" && !s.Comm {
+	} else if s.KStr == "" && !s.Comm { // a kernel string (q.str) comes from a present kptr — no uprobe.arg (nor for comm)
 		sv = l.val()
-		if l.kind == "ksyscall" {
+		if l.kind == "ksyscall" { // the user pointer in the syscall's n-th argument (read in two steps)
 			l.emit("%s = ebpf.ksyscall.arg %%ctx %d : !ebpf.ctx<\"ksyscall\"> -> !ebpf.user_str %s", sv, s.Len, loc(s.Pos))
 		} else {
 			l.emit("%s = ebpf.uprobe.arg %%ctx %d : !ebpf.ctx<\"uprobe\"> -> !ebpf.user_str %s", sv, s.Len, loc(s.Pos))
@@ -352,7 +374,7 @@ func (l *lowerer) outputStr(s Stmt) error {
 	if s.Var != "" {
 		ok, st = l.val(), l.val()
 		if s.Op == "discard" {
-			sn = l.val()
+			sn = l.val() // submitted (i1)
 		}
 	}
 	res := l.val()
@@ -365,29 +387,29 @@ func (l *lowerer) outputStr(s Stmt) error {
 		return err
 	}
 	l.emit("ebpf.ringbuf.store_record %s, %s : !ebpf.reservation<%s>, %s %s", res, v, rec, rec, loc(s.Pos))
-	if s.StrSSA != "" && s.Index != nil {
+	if s.StrSSA != "" && s.Index != nil { // the argv slot number (:u32)
 		iv := l.val()
 		l.emit("%s = arith.constant %d : i32 %s", iv, s.IndexV, loc(s.Pos))
 		l.emit("ebpf.ringbuf.store_field %s[%d], %s : !ebpf.reservation<%s>, i32 %s", res, s.Index.Offset, iv, rec, loc(s.Pos))
 	}
 	rs := l.val()
-	if s.Comm && mutation("comm-skip") {
+	if s.Comm && mutation("comm-skip") { // mutation: emit no task.comm and put 0 in status (the comm field stays the 0 from record.make)
 		l.emit("%s = arith.constant 0 : i64 %s", rs, loc(s.Pos))
-	} else if s.Comm {
+	} else if s.Comm { // the current task's comm into the reservation's byte array (helper 16 — the raw status)
 		l.emit("%s = ebpf.task.comm %s %q : !ebpf.reservation<%s> -> i64 %s", rs, res, s.Path, rec, loc(s.Pos))
-	} else if s.KStr != "" {
+	} else if s.KStr != "" { // what a char * member of a kernel struct points to (probe_read_kernel_str)
 		l.emit("%s = ebpf.kernel.read_str %s %q, %s %q : !ebpf.reservation<%s>, !ebpf.kptr<%q> -> i64 %s", rs, res, s.Path, l.env[s.PtrOf].name, s.KStr, rec, s.PtrOfKT.Name, loc(s.Pos))
-	} else if s.Buf {
+	} else if s.Buf { // n = max(0, min(len, N)) bytes of the user buffer (the whole field is zeroed first); count is the clamped length
 		cv := l.val()
 		l.emit("%s, %s = ebpf.user.read %s %q, %s, %s : !ebpf.reservation<%s>, !ebpf.user_buf, %s -> i64, i32 %s", rs, cv, res, s.Path, sv, lv.name, rec, lv.ty, loc(s.Pos))
 		l.emit("ebpf.ringbuf.store_field %s[%d], %s : !ebpf.reservation<%s>, i32 %s", res, s.CountF.Offset, cv, rec, loc(s.Pos))
 	} else {
 		l.emit("%s = ebpf.user.read_str %s %q, %s : !ebpf.reservation<%s>, !ebpf.user_str -> i64 %s", rs, res, s.Path, sv, rec, loc(s.Pos))
 	}
-	if (s.KStr == "" || !mutation("kstr-no-status")) && (s.TpStr == nil || !mutation("tpstr-no-status")) && (l.kind != "ksyscall" || !mutation("ksysstr-no-status")) {
+	if (s.KStr == "" || !mutation("kstr-no-status")) && (s.TpStr == nil || !mutation("tpstr-no-status")) && (l.kind != "ksyscall" || !mutation("ksysstr-no-status")) { // mutation: drop the store of a kernel string's status (also for a tracepoint's user_str and for ksyscall)
 		l.emit("ebpf.ringbuf.store_field %s[%d], %s : !ebpf.reservation<%s>, i64 %s", res, s.Field.Offset, rs, rec, loc(s.Pos))
 	}
-	if s.Op == "discard" {
+	if s.Op == "discard" { // discard when read_str's status is < 0 (bpf-mlir v1.3.0's per-arm consumption)
 		z, neg := l.val(), l.val()
 		l.emit("%s = arith.constant 0 : i64 %s", z, loc(s.Pos))
 		l.emit("%s = arith.cmpi slt, %s, %s : i64 %s", neg, rs, z, loc(s.Pos))
@@ -468,14 +490,17 @@ func (l *lowerer) outputStr(s Stmt) error {
 	if s.Var != "" {
 		l.env[s.Var] = ssaVal{ok, "i1"}
 		l.env[s.Var+"#status"] = ssaVal{st, "i64"}
-		l.env[s.Var+"#sent"] = ssaVal{ok, "i1"}
+		l.env[s.Var+"#sent"] = ssaVal{ok, "i1"} // output_str got its reservation, which means it submitted
 		if s.Op == "discard" {
-			l.env[s.Var+"#sent"] = ssaVal{sn, "i1"}
+			l.env[s.Var+"#sent"] = ssaVal{sn, "i1"} // whether it submitted (the discarding variant)
 		}
 	}
 	return nil
 }
 
+// outputKStr handles output_str whose third argument is `q.str(:m)` (bpf-mlir's kernel.read_str): q is a present kernel pointer
+// (`q = ctx.kptr_or_null(i, T)` with `if q`, or `t = ctx.kptr(i, T)`), and m is a `:strptr` member of q's struct. The kind is a
+// tracing kind that has kernel pointers.
 func (c *progCtx) outputKStr(call *Node, as []*Node, r *RingDecl, meth string, f, st *RecordField, name, refVar string) (Stmt, bool) {
 	sa := as[2]
 	if k := c.prog.Kind; k != "fentry" && k != "tp_btf" && k != "netfilter" {

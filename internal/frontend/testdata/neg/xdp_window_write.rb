@@ -1,6 +1,6 @@
 require "bpf"
 
-
+# Write to a window (not in the API — the pair of tc_window_write.rb)
 def p(ctx)
   w = ctx.check(0, 14)
   if w

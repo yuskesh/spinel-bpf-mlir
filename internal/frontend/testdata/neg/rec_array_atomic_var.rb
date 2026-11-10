@@ -1,6 +1,6 @@
 require "bpf"
 
-
+# atomic_add with a variable index (bpf-mlir has no such op)
 Hist = Struct.new(:hist, :n)
 BPF.record(Hist, hist: [:u32, 8], n: :u64)
 Hs = BPF::RecordMap.new("Hs", Hist.new(Array.new(8, 0), 0), 4)

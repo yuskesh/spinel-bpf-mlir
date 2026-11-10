@@ -1,8 +1,8 @@
 require "bpf"
 
-
-
-
+# fentry integer arguments: bpf_fentry_test6(u64 a, void *b, short c, int d, void *e, u64 f) (the kernel's tracing test run calls it
+# with (16, 17, 18, 19, 20, 21)). The void * arguments 1 and 4 are not declared. For the Filter tgid: add 1 to Out[0], Out[1] = low 32 bits of a,
+# Out[2] = c, Out[3] = d, add the low 32 bits of f to Out[4] (sign and width are checked against FUNC_PROTO by the farg row before load)
 Filter = BPF::ArrayMap.new("Filter", :u32, 1)
 Out = BPF::ArrayMap.new("Out", :i64, 5)
 

@@ -1,6 +1,6 @@
 require "bpf"
 
-
+# The loop IV (induction variable) as the index: a borrow cannot be carried into a loop (SB030), so the body does the lookup. After the (U) unroll the index is constant (bpf-mlir emits no index mask for it)
 Hist = Struct.new(:hist, :n)
 BPF.record(Hist, hist: [:u32, 8], n: :u64)
 Hs = BPF::RecordMap.new("Hs", Hist.new(Array.new(8, 0), 0), 2)

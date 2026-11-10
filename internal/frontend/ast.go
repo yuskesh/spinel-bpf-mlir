@@ -7,12 +7,18 @@ import (
 	"strings"
 )
 
+// A reader for Spinel's text AST (third_party/spinel/docs/internals/AST.md).
+// One record per line: `ROOT <id>`, `SOURCE_FILE <path>`, `FILE <fid> <path>`, `N <id> <Type>`, `S|I|F <id> <field> <value>`,
+// `R <id> <field> <id|-1>`, `A <id> <field> <id,…>`.
+// With `--dump-ast --emit-types` the nodes carry `node_end_line` / `node_end_col` (a node without them is treated as a read error).
+
+// Node is one AST node. Columns count from 0, as in Prism (the Ruby parser Spinel uses).
 type Node struct {
 	ID      int
 	Type    string
 	Str     map[string]string
 	Int     map[string]int64
-	IntText map[string]string
+	IntText map[string]string // the source text of an I value (for checking out-of-range literals — to see whether Spinel rounded it)
 	Ref     map[string]int
 	Arr     map[string][]int
 	FileID  int
@@ -22,6 +28,7 @@ type Node struct {
 	EndCol  int
 }
 
+// AST is the tree that was read.
 type AST struct {
 	Root       int
 	SourceFile string
@@ -37,8 +44,10 @@ func (a *AST) node(id int) *Node {
 	return a.Nodes[id]
 }
 
+// File returns the path of the node's file.
 func (a *AST) File(n *Node) string { return a.Files[n.FileID] }
 
+// ref returns the single child in field (nil if there is none).
 func (a *AST) ref(n *Node, field string) *Node {
 	id, ok := n.Ref[field]
 	if !ok {
@@ -47,6 +56,7 @@ func (a *AST) ref(n *Node, field string) *Node {
 	return a.node(id)
 }
 
+// arr returns the list of children in field.
 func (a *AST) arr(n *Node, field string) []*Node {
 	var out []*Node
 	for _, id := range n.Arr[field] {
@@ -57,6 +67,7 @@ func (a *AST) arr(n *Node, field string) []*Node {
 	return out
 }
 
+// ParseAST reads a text AST. A malformed record is an error (it is never skipped silently).
 func ParseAST(text string) (*AST, error) {
 	a := &AST{Root: -1, Files: map[int]string{}, Nodes: map[int]*Node{}, Parent: map[int]int{}}
 	get := func(id int) *Node {
@@ -118,6 +129,8 @@ func ParseAST(text string) (*AST, error) {
 			case "I":
 				v, err := strconv.ParseInt(val, 10, 64)
 				if err != nil {
+					// keep the source text of an integer that does not fit in 64 bits (literal ranges are checked on the source text — do not
+					// trust Spinel's rounding)
 					n.IntText[field] = val
 					continue
 				}
@@ -173,6 +186,8 @@ func ParseAST(text string) (*AST, error) {
 		if n.Type == "" {
 			return nil, fmt.Errorf("spinel AST: node %d has attributes but no N record", id)
 		}
+		// A node without a position (such as BlockParametersNode, which has neither node_line nor an end position) can be read. In
+		// the type join it becomes a node without a type (if it appears in an accepted form, analysis stops with Unknown)
 		if n.FileID < 0 {
 			continue
 		}
@@ -183,6 +198,11 @@ func ParseAST(text string) (*AST, error) {
 	return a, nil
 }
 
+// unescape is the inverse of escape_str in spinel_parse.c. The implementation is `%XX` percent encoding (`%` → %25, newline → %0A,
+// CR → %0D, tab → %09, space → %20, NUL → %00).
+// docs/internals/AST.md says backslash escapes, which differs from the implementation (docs/upstream_suspects.md S4 — found from the
+// operator name `%25` of `%`).
+// `%` is always escaped, so every `%XX` may be decoded.
 func unescape(s string) string {
 	if !strings.Contains(s, "%") {
 		return s

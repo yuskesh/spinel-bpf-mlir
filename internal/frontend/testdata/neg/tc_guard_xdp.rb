@@ -1,6 +1,6 @@
 require "bpf"
 
-
+# A sched_cls guard returns an XDP verdict
 In = BPF::ArrayMap.new("In", :i32, 1)
 
 def p(skb)

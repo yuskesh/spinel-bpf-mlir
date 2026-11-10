@@ -1,5 +1,27 @@
 # Release notes
 
+## v0.10.0
+
+- **Changed, accepted programs:** a value read by `v, st = ctx.read(n, off, :u64)` is now
+  handled like a u64 map value. It may be masked with a non-negative literal on the left
+  (`v & M`), shifted right by a literal 1..63 (`v >> K`, now a logical shift), or copied
+  straight into a u64 map value or u64 record member (newly accepted). Every other use is
+  refused with SB014: comparisons, copies to a local, reassignment and `v op= …`, `+ - * / %`,
+  `| ^`, `>> 0`, a mask on the right or a negative mask, and a store to a non-u64
+  destination. A name that is such a value on one path and an Integer on another is
+  refused when read. v0.9.1 accepted some of these and lowered `>>` and comparisons as
+  signed operations, which is wrong for a value of 2^63 or more. To keep a program
+  accepted, narrow the value first: `y = v & 0xFFFF_FFFF` or `y = v >> 32`.
+- **Changed, the build:** `spinelbpf` is now a C program, built with
+  `scripts/build-c-driver.sh build/bin`. Building needs no Go; Go 1.27 is needed only to
+  run the tests. The generated files are byte-identical to those of the Go build, and
+  `--version` prints the same lines as the Go build would.
+- **Fixed:** an index literal outside the supported range in `kptr(i, T)`,
+  `kptr_or_null(i, T)` or the tracing `arg(i)` now stops with SB014 at the literal, instead
+  of crashing the frontend. No accepted program changes.
+- **Changed, dependencies:** bpf-mlir v1.22.0, go-bpf-mlir v0.20.0 and bpf-mlir-loader
+  v0.1.1 (from v1.21.0, v0.19.0 and v0.1.0).
+
 ## v0.9.1 — go.sum fix
 
 - **Fixed:** the `go.sum` of v0.9.0 recorded a stale checksum for
@@ -58,18 +80,18 @@
   and the `SpinelBPF` library), the reason codes and the generated file formats can
   change in the next release. Changes are named in that release's notes.
 - Reason codes are never renumbered or reused. New codes are appended. SB012 is retired.
-- `spinelbpf --version` prints `spinel-bpf-mlir v0.9.1 (commit <build commit>[+dirty])`.
+- `spinelbpf --version` prints `spinel-bpf-mlir v0.10.0 (commit <build commit>[+dirty])`.
   The version is written only into the second line of each generated `.mlir`
-  (`// spinel-bpf-mlir v0.9.1`). Schemas, maps.json, domain.json and ELF objects carry
+  (`// spinel-bpf-mlir v0.10.0`). Schemas, maps.json, domain.json and ELF objects carry
   no version.
 
 ### Dependencies
 
 | Dependency | Version |
 |---|---|
-| bpf-mlir (`ebpf-compile`) | v1.21.0 |
-| go-bpf-mlir (Go packages) | v0.19.0 |
-| bpf-mlir-loader | v0.1.0 |
+| bpf-mlir (`ebpf-compile`) | v1.22.0 |
+| go-bpf-mlir (Go packages) | v0.20.0 |
+| bpf-mlir-loader | v0.1.1 |
 | Spinel | commit 086d514d |
 | LLVM / MLIR | 23.1.1 |
 | Go | 1.27 |

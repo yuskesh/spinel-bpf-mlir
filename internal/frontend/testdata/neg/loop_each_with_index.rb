@@ -2,7 +2,7 @@ require "bpf"
 
 Out = BPF::ArrayMap.new("Out", :i64, 4)
 
-
+# each_with_index (Spinel splices in its builtins — the position is the one after the splice line correction)
 def prog(ctx)
   s = 0
   (0...4).each_with_index { |a, i| s += i }

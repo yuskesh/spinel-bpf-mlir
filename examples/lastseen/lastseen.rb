@@ -1,7 +1,7 @@
 require "bpf"
 
-
-
+# The eBPF side — per EtherType kind, the last frame seen (an update with record.make — the last writer wins) and a count (atomic_add on a record member).
+# Kinds: 0 IPv4, 1 IPv6, 2 ARP, 3 other, 4 short frame (under 14 bytes). len is the IPv4 total length (0 otherwise); ns is a monotonic clock.
 LastSeen = Struct.new(:ethertype, :proto, :_pad0, :len, :ns)
 BPF.record(LastSeen, ethertype: :u16, proto: :u8, _pad0: :u8, len: :u32, ns: :u64)
 Count = Struct.new(:frames)
@@ -47,9 +47,9 @@ def last_seen(ctx)
 end
 BPF.xdp :last_seen
 
-
-
-
+# The user-space side — plain Ruby (compiled by Spinel).
+#   lastseen --iface IF [--duration-ms MS]   attach, wait MS milliseconds, print the count and the last frame per kind
+#   lastseen --selftest                     without attaching, run BPF_PROG_TEST_RUN on built frames (passed on 7.1.8, and on 6.12 and 6.6 in VMs)
 require "spinelbpf"
 
 USAGE = "usage: lastseen --iface IF [--duration-ms MS] | --selftest"
@@ -76,7 +76,7 @@ if iface == "" && !selftest
   raise USAGE
 end
 
-
+# frame builds a 64-byte frame with the EtherType and, for IPv4, the total length and protocol.
 def frame(et, total, proto)
   f = Array.new(64, 0)
   f[12] = et >> 8
@@ -90,7 +90,7 @@ def frame(et, total, proto)
   f
 end
 
-
+# last returns the last frame of kind k (map_get_record's Array of member values, in the order declared in BPF.record).
 def last(obj, k)
   v = obj.map_get_record(Last, k)
   LastSeen.new(v[0], v[1], v[2], v[3], v[4])

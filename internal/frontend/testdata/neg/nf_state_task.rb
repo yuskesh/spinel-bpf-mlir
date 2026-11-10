@@ -1,6 +1,6 @@
 require "bpf"
 
-
+# ctx.state with a T that is a kernel struct other than nf_hook_state
 Task = Struct.new(:pid)
 BPF.kernel_type(Task, "task_struct", pid: :i32)
 TaskT = BPF::KernelType.new(Task.new(0))

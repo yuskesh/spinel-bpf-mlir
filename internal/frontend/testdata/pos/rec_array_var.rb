@@ -1,6 +1,6 @@
 require "bpf"
 
-
+# Variable index: reads and writes at an index proven by its range (built in the lookup's present branch, so it does not join a constant default) become ebpf.ref.index
 Hist = Struct.new(:hist, :n)
 BPF.record(Hist, hist: [:u32, 8], n: :u64)
 Five = Struct.new(:a, :v)

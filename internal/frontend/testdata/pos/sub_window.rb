@@ -1,7 +1,7 @@
 require "bpf"
 
-
-
+# Packet windows and the context as helper arguments: a window helper (etype) called from two programs, xdp and sched_cls (same N),
+# a context helper (ip_proto, with ctx.check inside the helper) called from xdp. Windows inside helpers are read-only.
 Out = BPF::ArrayMap.new("Out", :u64, 4)
 
 def etype(w)

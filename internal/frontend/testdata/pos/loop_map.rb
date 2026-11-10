@@ -1,6 +1,6 @@
 require "bpf"
 
-
+# Map operations in a loop body: array atomic_add, hash add_or_init, a lookup and present check contained in the body, a global Counter
 Hits = BPF::Counter.new("Hits", :u64)
 Counts = BPF::ArrayMap.new("Counts", :u64, 8)
 Out = BPF::ArrayMap.new("Out", :u64, 4)

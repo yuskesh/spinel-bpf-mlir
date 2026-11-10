@@ -2,7 +2,7 @@ require "bpf"
 
 Out = BPF::ArrayMap.new("Out", :u32, 2)
 
-
+# Read-modify-write of the same map through one local
 def prog(ctx)
   p = Out.lookup(0)
   if p

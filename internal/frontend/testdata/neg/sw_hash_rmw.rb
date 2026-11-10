@@ -1,6 +1,6 @@
 require "bpf"
 
-
+# An RMW across a helper over a shared hash borrow (caller's read → integer argument → the helper's atomic_add delta on the borrow) is SB019
 H = BPF::HashMap.new("H", :u32, :u64, 16)
 
 def bump(q, d)

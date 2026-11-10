@@ -1,7 +1,7 @@
 require "bpf"
 
-
-
+# fentry struct arguments (`args: {0 => [:or_null, T]}`; an fentry pointer may always be NULL) and pointer fields.
+# On calls from our own tgid (Cfg[0]): wake_up_new_task calls with p present and its pid, bpf_fentry_test8's arg and calls with its a present, into Out.
 Task = Struct.new(:pid, :tgid)
 BPF.kernel_type(Task, "task_struct", pid: :i32, tgid: :i32)
 TaskT = BPF::KernelType.new(Task.new(0, 0))

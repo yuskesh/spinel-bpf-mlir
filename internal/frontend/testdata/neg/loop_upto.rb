@@ -2,7 +2,7 @@ require "bpf"
 
 Out = BPF::ArrayMap.new("Out", :i64, 4)
 
-
+# upto is outside the accepted shapes
 def prog(ctx)
   s = 0
   0.upto(3) { |i| s += i }

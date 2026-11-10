@@ -1,6 +1,6 @@
 require "bpf"
 
-
+# + 1 overflow on the value under a different literal key of the same map (an accepted shape — not an RMW) stays SB014
 Out = BPF::ArrayMap.new("Out", :u64, 2)
 
 def prog(ctx)

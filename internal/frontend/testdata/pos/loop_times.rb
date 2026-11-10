@@ -1,6 +1,6 @@
 require "bpf"
 
-
+# Bounded loops with literal trip counts: times, (0...N).each, (0..M).each (ebpf.loop with the unrolled (U) expansion, no bound)
 Out = BPF::ArrayMap.new("Out", :i64, 4)
 
 def prog(ctx)

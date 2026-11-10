@@ -1,6 +1,6 @@
 require "bpf"
 
-
+# Write to a cgroup_skb window (windows are read-only)
 def p(skb)
   w = skb.check(0, 20)
   if w

@@ -4,7 +4,7 @@ Proto = BPF::ArrayMap.new("Proto", :u64, 256)
 Port = BPF::ArrayMap.new("Port", :u32, 4)
 Seen = BPF::ArrayMap.new("Seen", :u32, 2)
 
-
+# An L4 window (variable offset) inside the IPv4 window, reading the outer window in a map's present branch, a semantic check of IHL
 def ipv4(ctx)
   eth = ctx.check(0, 14)
   if eth

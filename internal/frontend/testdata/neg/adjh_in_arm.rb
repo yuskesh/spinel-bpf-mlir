@@ -1,6 +1,6 @@
 require "bpf"
 
-
+# adjust_head inside an if arm with no window (only a statement directly in the program body is accepted)
 D = BPF::ArrayMap.new("D", :i32, 1)
 Out = BPF::ArrayMap.new("Out", :i64, 1)
 

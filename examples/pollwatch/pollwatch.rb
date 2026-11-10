@@ -1,9 +1,9 @@
 require "bpf"
 
-
-
-
-
+# The eBPF side — a tracing example:
+#   on_poll (kprobe) — on entry to do_sys_poll(ufds, nfds, end_time), per tgid, the number of calls and the sum of nfds (argument register 2, counting from 1)
+#   on_test (fentry) — counts entries to bpf_fentry_test1. fentry in bpf-mlir v0.17.0 cannot read integer arguments, so it uses only a helper (pid_tgid)
+# Filter 0 means every process, otherwise only that tgid — a value set at load time (in .rodata; it used to be an ArrayMap written by user space).
 Filter = BPF::OptionalConfig.new("Filter", :u32)
 Polls = BPF::HashMap.new("Polls", :u32, :u64, 1024)
 Nfds = BPF::HashMap.new("Nfds", :u32, :u64, 1024)
@@ -27,9 +27,9 @@ def on_test(ctx)
 end
 BPF.fentry :on_test, "bpf_fentry_test1"
 
-
-
-
+# The user-space side:
+#   pollwatch --selftest          filter on our own tgid, make poll(2) calls and tracing test runs ourselves, and check the counts
+#   pollwatch [--duration-ms MS]  count poll(2) in every process for MS milliseconds (default 3000) and print the 5 tgids with the most calls
 require "spinelbpf"
 
 module Sys
@@ -63,7 +63,7 @@ end
 me = Sys.sys_getpid
 cfg = SpinelBPF::ConfigSet.new
 if selftest
-  cfg.set_optional(Filter, me)
+  cfg.set_optional(Filter, me) # only our own tgid (--duration-ms leaves it unset — 0 means every process)
 end
 obj = SpinelBPF.load_embedded_config(cfg)
 puts "unmet (not blocking): #{obj.unmet.length} (requirements policy #{SpinelBPF.policy_version}) filter=#{obj.optional_get(Filter)}"

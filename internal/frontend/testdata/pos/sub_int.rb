@@ -1,7 +1,7 @@
 require "bpf"
 
-
-
+# eBPF-side subprograms (static helpers with integer arguments and return values). An arithmetic helper, a map-writing helper, a helper calling a helper,
+# a helper with a loop, one helper called from two programs. Argument ranges are the union over call sites; the return value is full range in the caller (narrowed by & M).
 In = BPF::ArrayMap.new("In", :u64, 4)
 Out = BPF::ArrayMap.new("Out", :u64, 8)
 

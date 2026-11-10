@@ -1,6 +1,6 @@
 require "bpf"
 
-
+# cgroup_skb returns a socket_filter verdict
 def p(skb)
   BPF::SF_KEEP
 end

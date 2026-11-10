@@ -1,8 +1,8 @@
 require "bpf"
 
-
-
-
+# A ksyscall user string argument: filename (2nd argument, :user_str) of openat(int dfd, const char *filename, int flags, umode_t mode)
+# read by ctx.str_arg(2) into the ring event's name ([:u8, 32]) (ksyscall.arg -> !ebpf.user_str and user.read_str); flags (3rd argument) is an integer.
+# For the Filter tgid into Events {flags, name, status}; on success add 1 to Out[0]
 Ev = Struct.new(:flags, :pad, :name, :status)
 BPF.record(Ev, flags: :i32, pad: :u32, name: [:u8, 32], status: :i64)
 

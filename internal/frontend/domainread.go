@@ -6,8 +6,15 @@ import (
 	"github.com/yuskesh/go-bpf-mlir/requirements"
 )
 
+// The driver seam (where the driver takes spinel-mlir's consumer output instead of this Go frontend's) reads back the domain the
+// consumer wrote — its bytes matched this package's DomainGraph on every case of the comparison corpus — and uses its roots (to check
+// the uprobe targets) and its diagnostics (printed as the Go path prints them). The reader is strict: an unknown key, a duplicate or a
+// wrong type stops it.
+
+// DomainRoot is an element of the domain's roots (the name, kind, and declaration and definition positions of a Go Result.Programs entry).
 type DomainRoot = domainRoot
 
+// ReadDomainGraph reads a DomainGraph JSON document and returns its roots and its diagnostics (Diags, in the domain's order).
 func ReadDomainGraph(b []byte) ([]DomainRoot, Diags, error) {
 	var doc struct {
 		Source    string       `json:"source"`

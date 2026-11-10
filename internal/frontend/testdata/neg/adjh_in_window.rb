@@ -1,6 +1,6 @@
 require "bpf"
 
-
+# adjust_head inside an if-w arm (it would cross a live window)
 Out = BPF::ArrayMap.new("Out", :i64, 2)
 
 def p(ctx)

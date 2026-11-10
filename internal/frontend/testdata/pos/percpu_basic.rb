@@ -1,6 +1,6 @@
 require "bpf"
 
-
+# per-CPU maps: 4 classes, += / -= on record members (u64, u32), array lookup then update of the same key, percpu_hash status operations and add_or_init
 Stats = Struct.new(:packets, :bytes, :drops, :_pad0)
 BPF.record(Stats, packets: :u64, bytes: :u64, drops: :u32, _pad0: :u32)
 FlowKey = Struct.new(:proto, :_pad0, :port, :addr)

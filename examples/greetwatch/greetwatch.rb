@@ -1,8 +1,8 @@
 require "bpf"
 
-
-
-
+# The eBPF side — a uprobe on entry to greet(const char *name, uint32_t count) in the C target (target/greeter).
+# output_str reads the name (a user-space string) into the name field (a u8 array) of a ring event, and also writes the read status into the event's status.
+# Counts Stats[0] when the reservation succeeds and Stats[1] when it fails.
 Greeting = Struct.new(:pid_tgid, :count, :_pad0, :status, :name)
 BPF.record(Greeting, pid_tgid: :u64, count: :u32, _pad0: :u32, status: :i64, name: [:u8, 32])
 Greetings = BPF::RingBuf.new("Greetings", Greeting.new(0, 0, 0, 0, Array.new(32, 0)), 65536)
@@ -18,14 +18,14 @@ def on_greet(ctx)
 end
 BPF.uprobe :on_greet, "target/greeter", "greet", params: {1 => :user_str, 2 => :u32}
 
-
-
-
-
-
+# The user-space side — plain Ruby (compiled by Spinel).
+#   greetwatch --target PATH --pid PID [--duration-ms MS]   attach to greet in process PID (0 means every process) and print events for MS milliseconds
+#   greetwatch --selftest --target PATH                     start the target as a child process, attach, send 4 names (normal, empty, long, NULL) and check them
+# Showing an event (bpf-mlir's empty-string rule, applied on the user side): status < 0 is a failed read (name is all zero, the same bytes as empty — only status tells them apart);
+# status >= 0 with name[0] == 0 is empty (an empty string's status is 1 or 0 depending on the kernel); anything else is the name (up to the NUL).
 require "spinelbpf"
 
-
+# GW runs the selftest's child process (fork, exec, pipe) — inline C inside the example.
 module GW
   ffi_source <<~C
     #include <stdio.h>
@@ -94,7 +94,7 @@ if target == "" || (!selftest && pid < 0)
   raise USAGE
 end
 
-
+# text renders an event's name (by the rule above). v is read_record's flat value [pid_tgid, count, _pad0, status, name[0] … name[31]].
 def text(v)
   if v[3] < 0
     return "(read failed)"

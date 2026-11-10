@@ -1,6 +1,6 @@
 require "bpf"
 
-
+# A sched_cls verdict inside a fentry program
 Counts = BPF::ArrayMap.new("Counts", :u64, 2)
 
 def on_t(ctx)

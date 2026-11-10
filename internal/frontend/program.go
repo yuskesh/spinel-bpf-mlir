@@ -7,75 +7,87 @@ import (
 	"strings"
 )
 
+// This file checks the body of an eBPF-side program and translates it to IR. A shape that is not in the table stops with its
+// position.
+
+// Expr is an expression on the eBPF side (an Integer is lowered as i64, a bool as i1).
 type Expr struct {
-	Kind   string
-	Op     string
-	Args   []*Expr
+	Kind string // "lit" "blit" "var" "load" "wload" "fload" "rmake" "un" "bin" "cmp" "and" "or" "not" "sel"
+	Op   string // un: "-@" "~"; bin: "+" "-" "*" "&" "|" "^" "<<" ">>" "/" "%"; cmp: "==" …
+	Args []*Expr
+	// TpCopy is the tracepoint array field of a zarr's ctx.copy(:f) (after store_record it is copied into the reservation with
+	// ebpf.tp.field.copy).
 	TpCopy *TpField
 	Lit    *big.Int
 	B      bool
 	Var    string
-	Ref    string
-	Map    *MapDecl
-	Bool   bool
-	Iv     Ival
-	Wide   bool
-	Div    string
-	Idx    int64
-	Field  *RecordField
-	Ring   *RingDecl
-	Len    int64
-	Glob   *GlobalDecl
-	Path   string
+	Ref    string       // load: the borrowed local variable; wload: the window local variable
+	Map    *MapDecl     // load: the map that was looked up
+	Bool   bool         // the result is a bool (i1)
+	Iv     Ival         // the interval of an Integer
+	Wide   bool         // a u64 load that does not fit in i64 (only copied, `& M` or `>> K`)
+	Div    string       // how "/" and "%" lower: "u" (divui / remui) or "floor" (floordivsi and the floor remainder)
+	Idx    int64        // wload: the window's constant index (Op is "u8" "be16" "be32" "le16" "le32")
+	Field  *RecordField // fload: the record member
+	Ring   *RingDecl    // ringout: the ring buffer
+	Len    int64        // wload: the window's length
+	Glob   *GlobalDecl  // gload: the global
+	Path   string       // fload: the op's field path ("" means the member's name; an array element is `m[k]`)
 	Pos    Pos
 }
 
+// Stmt is a statement on the eBPF side.
 type Stmt struct {
-	Kind    string
-	Field   *RecordField
-	Op      string
-	Ring    *RingDecl
-	Var     string
-	Glob    *GlobalDecl
-	Off     *Expr
-	Len     int64
-	Val     *Expr
-	Cond    *Expr
-	Then    []Stmt
-	Else    []Stmt
-	Map     *MapDecl
-	Key     *Expr
-	Value   *Expr
-	Pos     Pos
-	IfPos   Pos
+	Kind  string       // "assign" "if" "lookup_check" "window_check" "atomic_add" "update" "fstore" "fatomic"
+	Field *RecordField // fstore / fatomic: the record member
+	Op    string       // fadd: "+" / "-" (+= / -= on a member of a per-CPU record)
+	Ring  *RingDecl    // ringout: `_ = R.output(…)`
+	Var   string       // assign; the borrow of lookup_check; the window of window_check
+	Glob  *GlobalDecl  // gadd: the counter
+	Off   *Expr        // the offset of window_check
+	Len   int64        // the length of window_check
+	Val   *Expr        // assign
+	Cond  *Expr        // if
+	Then  []Stmt
+	Else  []Stmt
+	Map   *MapDecl
+	Key   *Expr
+	Value *Expr // the delta of atomic_add / the value of update
+	Pos   Pos
+	IfPos Pos
+	// loop: Count is N, Bound is the run-time count (nil for a literal), Clamp is an explicit 0 for a negative lower end, Incl is
+	// m + 1 for `(0..m)`, Var is the block argument, Carried are the iter_args
 	Count   int64
 	Bound   *Expr
-	Path    string
+	Path    string // fstore / fatomic: the op's field path ("" means the member's name; an array element is `m[k]`)
 	Clamp   bool
 	Incl    bool
 	Carried []string
-	KT      *KernelTypeDecl
-	PtrOf   string
-	PtrOfKT *KernelTypeDecl
-	KStr    string
-	Comm    bool
-	TpCopy  *TpField
-	TpStr   *TpField
-	Argv    bool
-	Index   *RecordField
-	StrSSA  string
-	IndexV  int
-	Buf     bool
-	BufLen  *Expr
-	CountF  *RecordField
+	KT      *KernelTypeDecl // kptr: the kernel struct; kcheck: the struct pointed to
+	PtrOf   string          // kcheck: the t of `rp = t.ptr(:m, T)` ("" means ctx.kptr_or_null)
+	PtrOfKT *KernelTypeDecl // kcheck: t's struct
+	KStr    string          // ostr: the strptr member m of q.str(:m) (PtrOf is q)
+	Comm    bool            // ostr: R.output_comm — the current task's comm (ebpf.task.comm)
+	TpCopy  *TpField        // tpcopy: r.load.m = ctx.copy(:f) — a tracepoint array field (ebpf.tp.field.copy)
+	TpStr   *TpField        // ostr: ctx.str_field(:f) — a tracepoint field of type :user_str (ebpf.tp.field -> !ebpf.user_str)
+	Argv    bool            // ostr: R.output_argv — one event per slot 0..19 of the argv array (ksyscall argument Len or tracepoint field TpStr)
+	Index   *RecordField    // ostr (Argv): the :u32 member that receives the slot number
+	StrSSA  string          // ostr (only during lowering): the !ebpf.user_str value made earlier (argv's str_at result — emits no op)
+	IndexV  int             // ostr (only during lowering): the slot number written to Index
+	Buf     bool            // ostr: R.output_buf — reads uprobe's :user_buf argument Len with ebpf.user.read
+	BufLen  *Expr           // ostr (Buf): the integer expression for the length to read (user.read clamps it as signed)
+	CountF  *RecordField    // ostr (Buf): the :i32 member that receives the clamped length
 }
 
 var binOps = map[string]bool{"+": true, "-": true, "*": true, "&": true, "|": true, "^": true, "<<": true, ">>": true, "/": true, "%": true}
 var cmpOps = map[string]bool{"==": true, "!=": true, "<": true, "<=": true, ">": true, ">=": true}
 var mapOps = map[string]bool{"atomic_add": true, "update": true, "lookup": true, "insert": true, "replace": true, "delete": true, "add_or_init": true}
 
+// windowReads maps each window read to its width in bytes. There is no 64-bit read — it would not fit in i64.
 var windowReads = map[string]int64{"u8": 1, "be16": 2, "be32": 4, "le16": 2, "le32": 4}
 
+// winInfo describes a window local variable (a window is a bounds-checked view of packet bytes). active means we are inside the
+// then arm of `if w` (with nesting, an outer window can also be read inside an inner arm).
 type winInfo struct {
 	len    int64
 	active bool
@@ -84,11 +96,14 @@ type winInfo struct {
 type varInfo struct {
 	Bool bool
 	Iv   Ival
-	From map[string]bool
+	From map[string]bool // names of the lookup locals the value came from (for SB019, a read-modify-write through a local). Immutable — a join makes a new set
+	// Wide is a u64 ctx.read value (bound once; used only as `& M`, `>> K`, or copied to a u64 map value or record member).
+	// Mixed is a name that is such a value on one path and an Integer on another; every read of it is refused.
+	Wide, Mixed bool
 }
 
 type progCtx struct {
-	statusReported map[string]bool
+	statusReported map[string]bool // status locals already reported with SB026 (a second assignment does not report again)
 	z              *analyzer
 	a              *AST
 	t              *Types
@@ -96,34 +111,35 @@ type progCtx struct {
 	name           string
 	param          string
 	def            *Node
-	refs           map[string]*Node
-	refMap         map[string]*MapDecl
-	refKey         map[string]*Expr
-	wins           map[string]*winInfo
+	refs           map[string]*Node    // lookup local variable → the LocalVariableWriteNode that made it
+	refMap         map[string]*MapDecl // lookup local variable → the map looked up
+	refKey         map[string]*Expr    // lookup local variable → the lookup key
+	wins           map[string]*winInfo // the local variables of `w = ctx.check(off, N)`
 	used           map[*MapDecl]bool
-	usedGlobals    map[*GlobalDecl]bool
+	usedGlobals    map[*GlobalDecl]bool // the globals the program uses
 	usedRings      map[*RingDecl]bool
-	badBind        map[string]bool
-	ostrs          map[string]bool
-	ringMake       bool
-	ostrLive       map[string]bool
-	kptrs          map[string]*KernelTypeDecl
-	kchecked       map[string]bool
-	fpath          []string
-	ctxKind        string
-	poisoned       map[string]bool
-	skipIfs        map[int]bool
-	env            map[string]*varInfo
-	loops          []*loopFrame
-	escArm         string
-	blockLocals    map[string]bool
-	guardReturns   map[*Node]bool
+	badBind        map[string]bool            // lookup / window names whose binding was refused (later reads do not report again — the first in the order of reasons)
+	ostrs          map[string]bool            // locals holding an output_str result (read only through `if r` and `r.status` inside then)
+	ringMake       bool                       // inside the record.make of a ring's output (an array member accepts t.copy)
+	ostrLive       map[string]bool            // output_str results inside then (r.status may be read)
+	kptrs          map[string]*KernelTypeDecl // kernel pointer locals (read only through `t.load.m`)
+	kchecked       map[string]bool            // locals holding a kptr_or_null / ptr result (a kernel pointer only inside the then of `if q`)
+	fpath          []string                   // the subprogram's diagnostic path (the first path that reached it)
+	ctxKind        string                     // the context kind the subprogram received (xdp / sched_cls)
+	poisoned       map[string]bool            // locals whose assignment was refused (later reads do not add SB001)
+	skipIfs        map[int]bool               // the if right after a refused binding (the walk of another binding does not report reads inside it)
+	env            map[string]*varInfo        // local variables (only those defined on every path)
+	loops          []*loopFrame               // the loops being analysed
+	escArm         string                     // where break / next sits: "" directly in a loop body, "if" in an if / unless / present arm, "window" in a packet window arm
+	blockLocals    map[string]bool            // locals made inside a loop's block (not visible after the loop — Ruby block locals)
+	guardReturns   map[*Node]bool             // ReturnNodes of early-return guards directly in the program (the verdict walk does not stop on them)
 }
 
 func (c *progCtx) add(v Verdict, code Code, n *Node, format string, args ...any) {
 	c.z.diags = append(c.z.diags, Diag{Verdict: v, Code: code, Pos: c.z.pos(c.a, n), Path: c.path(), Msg: fmt.Sprintf(format, args...)})
 }
 
+// rbs returns the node's type ("" when it has none or it is ambiguous).
 func (c *progCtx) rbs(n *Node) string {
 	r, cnt := c.t.TypeOf(c.a, n)
 	if cnt != 1 {
@@ -132,6 +148,10 @@ func (c *progCtx) rbs(n *Node) string {
 	return r.RBS
 }
 
+// typed checks that a node of an accepted shape is bound to exactly one type record (ambiguous → SB015, none → Unknown).
+// A node outside the table is not required to have a type: structure is judged first. Requiring a type on every node of the
+// body first made a negative test stop for the wrong reason — a `return` in the middle of the body stopped with SB001 instead of
+// SB008, because a ReturnNode has no type.
 func (c *progCtx) typed(x *Node) bool {
 	_, cnt := c.t.TypeOf(c.a, x)
 	switch {
@@ -139,9 +159,11 @@ func (c *progCtx) typed(x *Node) bool {
 		c.add(Rejected, SB015AmbiguousType, x, "Spinel gives this %s %d types (a specialised node) — the eBPF side needs exactly one", x.Type, cnt)
 		return false
 	case cnt == 0 && c.prog != nil && c.prog.Kind == "fentry" && x.Type == "CallNode" && x.Str["name"] == "kptr" && c.isVarRead(c.a.ref(x, "receiver"), c.param):
+		// A fentry struct argument is always nullable (integer arguments can be read with ctx.arg(i))
 		c.add(Rejected, SB033KernelTypeShape, x, "a fentry program reads its struct arguments only as `q = %s.kptr_or_null(i, T)` and `if q` (fentry pointers may always be NULL — declare `i => [:or_null, T]`)", c.param)
 		return false
 	case cnt == 0 && c.prog != nil && !hasPacket(c.prog.Kind) && x.Type == "CallNode" && c.isVarRead(c.a.ref(x, "receiver"), c.param):
+		// A method the tracing context class does not have (fentry's ret, fexit's arg, check, …) — the program kind was mixed up
 		c.add(Rejected, SB028TracingKind, x, "the %s context has no `%s` — it reads %s", c.prog.Kind, x.Str["name"], ctxReads[c.prog.Kind])
 		return false
 	case cnt == 0:
@@ -157,6 +179,7 @@ func (z *analyzer) program(a *AST, d *Node, r rootDecl) *Program {
 	c.prog = &Program{Name: r.Name, Kind: r.Kind, Pos: z.pos(a, d), DeclPos: r.Pos, EndLine: d.EndLine, Target: r.Target, Nargs: r.Nargs, Ret: r.Ret, Params: r.Params, BinarySHA: r.BinarySHA, BinaryPath: r.BinaryPath, SysTarget: r.SysTarget, TArgs: r.TArgs, TFields: r.TFields}
 	before := len(z.diags)
 
+	// The type of the root's parameter is the kind's context class from bpf.rb (XdpMd, FentryCtx, FexitCtx, KprobeCtx, SkBuff)
 	pn := a.ref(d, "parameters")
 	param := a.arr(pn, "requireds")[0]
 	c.param = param.Str["name"]
@@ -178,9 +201,12 @@ func (z *analyzer) program(a *AST, d *Node, r rootDecl) *Program {
 		}
 		stmts = a.arr(body, "body")
 	}
+	// A verdict constant of another kind means the program kind was mixed up (SB028 — stop at the first one). Tracing programs
+	// return no verdict; xdp and sched_cls do not return each other's constants (the values overlap — XDP_PASS = 2 = TC_DROP — so
+	// we do not build a form that would pass silently)
 	bad := false
 	walk(a, d, func(x *Node) bool {
-		if !bad && r.Kind != "fmod_ret" && c.isFmodReturn(x) {
+		if !bad && r.Kind != "fmod_ret" && c.isFmodReturn(x) { // only fmod_ret replaces the return value
 			c.add(Rejected, SB028TracingKind, x, "`BPF.fmod_return` ends only a fmod_ret program — %s", verdictReturns(r.Kind))
 			bad = true
 		}
@@ -189,7 +215,7 @@ func (z *analyzer) program(a *AST, d *Node, r rootDecl) *Program {
 			vk := verdictKindOf(cn)
 			switch {
 			case vk == "" || vk == r.Kind:
-			case vk == "socket_filter" || r.Kind == "socket_filter" || vk == "cgroup_skb" || r.Kind == "cgroup_skb" || vk == "netfilter" || r.Kind == "netfilter" || vk == "flow_dissector" || r.Kind == "flow_dissector" || vk == "fmod_ret" || r.Kind == "fmod_ret":
+			case vk == "socket_filter" || r.Kind == "socket_filter" || vk == "cgroup_skb" || r.Kind == "cgroup_skb" || vk == "netfilter" || r.Kind == "netfilter" || vk == "flow_dissector" || r.Kind == "flow_dissector" || vk == "fmod_ret" || r.Kind == "fmod_ret": // kinds with verdicts of their own
 				c.add(Rejected, SB028TracingKind, x, "%s is %s verdict — %s", cn, verdictKindText(vk), verdictReturns(r.Kind))
 				bad = true
 			case vk == "xdp" && verdictsOf(r.Kind) == nil:
@@ -212,6 +238,7 @@ func (z *analyzer) program(a *AST, d *Node, r rootDecl) *Program {
 		return nil
 	}
 	if verdictsOf(r.Kind) == nil {
+		// tracing: the last value is dropped and the program ends with `ebpf.verdict "done"`
 		c.prog.Body = c.stmts(stmts, "")
 		c.prog.Verdict = "done"
 		c.prog.VerdictPos = c.z.pos(a, d)
@@ -222,7 +249,7 @@ func (z *analyzer) program(a *AST, d *Node, r rootDecl) *Program {
 		}
 		last := stmts[len(stmts)-1]
 		c.guardReturns = map[*Node]bool{}
-		c.prog.Body = c.guardStmts(stmts[:len(stmts)-1])
+		c.prog.Body = c.guardStmts(stmts[:len(stmts)-1]) // early-return guards directly in the program
 		c.verdict(last)
 	}
 	for _, m := range z.mapOrder {
@@ -246,6 +273,7 @@ func (z *analyzer) program(a *AST, d *Node, r rootDecl) *Program {
 	return c.prog
 }
 
+// classInLib reports whether the class name is defined only in bpf.rb (as an AST ClassNode).
 func (z *analyzer) classInLib(a *AST, name string) bool {
 	inLib, elsewhere := false, false
 	walk(a, a.node(a.Root), func(n *Node) bool {
@@ -264,6 +292,7 @@ func (z *analyzer) classInLib(a *AST, name string) bool {
 	return inLib && !elsewhere
 }
 
+// copyEnv copies an environment.
 func copyEnv(e map[string]*varInfo) map[string]*varInfo {
 	out := map[string]*varInfo{}
 	for k, v := range e {
@@ -273,6 +302,8 @@ func copyEnv(e map[string]*varInfo) map[string]*varInfo {
 	return out
 }
 
+// joinEnv returns the environment after two arms: it keeps only the variables defined in both, with the union of their intervals
+// (a variable created in only one arm is nil in Ruby on the other arm, so it cannot be read).
 func joinEnv(a, b map[string]*varInfo) map[string]*varInfo {
 	out := map[string]*varInfo{}
 	for k, va := range a {
@@ -285,6 +316,9 @@ func joinEnv(a, b map[string]*varInfo) map[string]*varInfo {
 			v.Iv = union(va.Iv, vb.Iv)
 		}
 		v.From = unionRefs(va.From, vb.From)
+		if va.Mixed || vb.Mixed || va.Wide != vb.Wide { // never merge a u64 ctx.read value with an Integer
+			v.Wide, v.Mixed = false, true
+		}
 		out[k] = &v
 	}
 	return out
@@ -299,19 +333,20 @@ func sortedKeys(m map[string]*varInfo) []string {
 	return out
 }
 
+// stmts translates a sequence of statements. refVar is the borrowed local variable inside a present arm ("" outside an arm).
 func (c *progCtx) stmts(ns []*Node, refVar string) []Stmt {
 	var out []Stmt
 	for i := 0; i < len(ns); i++ {
 		n := ns[i]
 		switch n.Type {
 		case "CallNode":
-			if fi := c.z.userCall(c.a, n); fi != nil {
+			if fi := c.z.userCall(c.a, n); fi != nil { // the statement `f(x)` — its value is dropped
 				if e := c.subCall(n, fi, refVar); e != nil {
 					out = append(out, Stmt{Kind: "drop", Val: e, Pos: c.z.pos(c.a, n)})
 				}
 				continue
 			}
-			if c.isIterCall(n) {
+			if c.isIterCall(n) { // a bounded loop
 				if s, ok := c.loopStmt(n); ok {
 					out = append(out, s)
 				}
@@ -324,15 +359,15 @@ func (c *progCtx) stmts(ns []*Node, refVar string) []Stmt {
 				c.add(Rejected, SB025DroppedEvent, n, "%s", droppedMsg(c.ringOf(c.a.ref(n, "receiver"))))
 				continue
 			}
-			if c.isOutputStr(n) {
+			if c.isOutputStr(n) { // a statement that drops the result
 				shape := outputStrShape(c.ringOf(c.a.ref(n, "receiver")))
-				if n.Str["name"] == "output_comm" {
+				if n.Str["name"] == "output_comm" { // the current task's comm
 					shape = outputCommShape(c.ringOf(c.a.ref(n, "receiver")))
 				}
 				c.add(Rejected, SB025DroppedEvent, n, "the result of %s (nil when the ring is full) is dropped — use %s", n.Str["name"], shape)
 				continue
 			}
-			if c.isAdjustPkt(n) {
+			if c.isAdjustPkt(n) { // a statement that drops the status
 				c.add(Rejected, SB026StatusIgnored, n, "the status of `%s.%s(d)` (0 or −errno) is dropped — use `st = %s.%s(d)` (read later) or `_ = %s.%s(d)`", c.param, n.Str["name"], c.param, n.Str["name"], c.param, n.Str["name"])
 				continue
 			}
@@ -367,7 +402,7 @@ func (c *progCtx) stmts(ns []*Node, refVar string) []Stmt {
 			c.add(Rejected, SB019SharedReadModifyWrite, n, "`.%s %s= …` on a record member reads and writes the map value — concurrent CPUs lose updates; use `p.atomic_add(:%s, d)`", n.Str["name"], n.Str["binary_operator"], n.Str["name"])
 		case "LocalVariableWriteNode":
 			v := c.a.ref(n, "value")
-			if c.isSkAssign(v) {
+			if c.isSkAssign(v) { // `st = Socks.assign(ctx, k)`
 				if s, ok := c.skAssignStmt(n); ok {
 					out = append(out, s)
 				} else {
@@ -378,7 +413,7 @@ func (c *progCtx) stmts(ns []*Node, refVar string) []Stmt {
 			if c.outputOfBadRing(v) {
 				continue
 			}
-			if c.kcheckCall(v) {
+			if c.kcheckCall(v) { // q = ctx.kptr_or_null(i, T) / rp = t.ptr(:m, T) and the if right after it
 				if i+1 >= len(ns) || ns[i+1].Type != "IfNode" || !c.isVarRead(c.a.ref(ns[i+1], "predicate"), n.Str["name"]) {
 					c.add(Rejected, SB005RefCheckShape, n, "`%s = %s(…)` (a nullable kernel pointer) must be followed immediately by `if %s`", n.Str["name"], v.Str["name"], n.Str["name"])
 					c.badBind[n.Str["name"]] = true
@@ -393,7 +428,7 @@ func (c *progCtx) stmts(ns []*Node, refVar string) []Stmt {
 				i++
 				continue
 			}
-			if c.kptrCall(v) {
+			if c.kptrCall(v) { // t = ctx.kptr(i, T) — only as a statement directly in the program
 				if s, ok := c.kptrBind(n, c.topLevel(n)); ok {
 					out = append(out, s)
 				} else {
@@ -401,7 +436,7 @@ func (c *progCtx) stmts(ns []*Node, refVar string) []Stmt {
 				}
 				continue
 			}
-			if c.isOutputStr(v) {
+			if c.isOutputStr(v) { // r = R.output_str(…)
 				if n.Str["name"] == "_" {
 					if s, ok := c.outputStr(v, "", refVar); ok {
 						out = append(out, s)
@@ -434,7 +469,7 @@ func (c *progCtx) stmts(ns []*Node, refVar string) []Stmt {
 				}
 				continue
 			}
-			if c.isAdjustPkt(v) && n.Str["name"] == "_" {
+			if c.isAdjustPkt(v) && n.Str["name"] == "_" { // `_ = ctx.adjust_head(d)` — dropping the status on purpose, written out
 				if e := c.expr(v, refVar); e != nil {
 					out = append(out, Stmt{Kind: "drop", Val: e, Pos: c.z.pos(c.a, n)})
 				}
@@ -445,7 +480,7 @@ func (c *progCtx) stmts(ns []*Node, refVar string) []Stmt {
 					c.poisoned[n.Str["name"]] = true
 					continue
 				}
-				if n.Str["name"] == "_" {
+				if n.Str["name"] == "_" { // dropping the status on purpose, written out
 					if e := c.statusExpr(v, m, refVar); e != nil {
 						out = append(out, Stmt{Kind: "drop", Val: e, Pos: c.z.pos(c.a, n)})
 					}
@@ -491,7 +526,7 @@ func (c *progCtx) stmts(ns []*Node, refVar string) []Stmt {
 			if s, ok := c.assign(n, n.Str["name"], v, refVar); ok {
 				out = append(out, s)
 			}
-		case "MultiWriteNode":
+		case "MultiWriteNode": // only `v, st = ctx.read(n, offset, :type)`
 			if s, ok := c.kreadStmt(n); ok {
 				out = append(out, s)
 			}
@@ -504,14 +539,14 @@ func (c *progCtx) stmts(ns []*Node, refVar string) []Stmt {
 				out = append(out, s)
 			}
 		case "ReturnNode":
-			continue
+			continue // a return in the middle is stopped by the verdict check with SB008
 		case "LocalVariableReadNode":
 			if n.Str["name"] == c.param {
 				c.add(Rejected, SB001UnsupportedConstruct, n, "the context `%s` is used only as `w = %s.check(off, len)` right before `if w`", c.param, c.param)
 			} else {
 				c.add(Rejected, SB001UnsupportedConstruct, n, "a bare expression statement is not accepted")
 			}
-		case "BreakNode", "NextNode":
+		case "BreakNode", "NextNode": // escapes from a bounded loop
 			if s, ok := c.escape(n, i == len(ns)-1); ok {
 				out = append(out, s)
 			}
@@ -528,10 +563,11 @@ func (c *progCtx) isVarRead(n *Node, name string) bool {
 	return n != nil && n.Type == "LocalVariableReadNode" && n.Str["name"] == name
 }
 
+// assign translates `x = e` (an Integer or a bool). The type must be the same as at the first assignment.
 func (c *progCtx) assign(n *Node, name string, v *Node, refVar string) (Stmt, bool) {
 	if c.badBind[name] || c.readsBad(v) {
 		c.poisoned[name] = true
-		return Stmt{}, false
+		return Stmt{}, false // follows from a reason already reported — do not report again
 	}
 	if name == c.param || c.refs[name] != nil || c.wins[name] != nil {
 		c.add(Rejected, SB005RefCheckShape, n, "`%s` cannot be reassigned (the context / a lookup result / a window is bound once)", name)
@@ -539,6 +575,10 @@ func (c *progCtx) assign(n *Node, name string, v *Node, refVar string) (Stmt, bo
 	}
 	if reservedPrefix.MatchString(name) {
 		c.add(Rejected, SB007ReservedName, n, "`%s` uses the reserved prefix spinelbpf_", name)
+		return Stmt{}, false
+	}
+	if !c.wideRebindOK(name, n) { // the new varInfo below carries neither Wide nor Mixed, so a Mixed name is rebound as an Integer
+		c.poisoned[name] = true
 		return Stmt{}, false
 	}
 	if v == nil || !c.typed(n) {
@@ -569,6 +609,7 @@ func (c *progCtx) assign(n *Node, name string, v *Node, refVar string) (Stmt, bo
 	return Stmt{Kind: "assign", Var: name, Val: e, Pos: c.z.pos(c.a, n)}, true
 }
 
+// opAssign translates `x op= e` (under the same rules as `x = x op e`).
 func (c *progCtx) opAssign(n *Node, refVar string) (Stmt, bool) {
 	name, op := n.Str["name"], n.Str["binary_operator"]
 	info, ok := c.env[name]
@@ -578,6 +619,9 @@ func (c *progCtx) opAssign(n *Node, refVar string) (Stmt, bool) {
 	}
 	if info.Bool || !binOps[op] {
 		c.add(Rejected, SB001UnsupportedConstruct, n, "`%s %s= …` is not accepted", name, op)
+		return Stmt{}, false
+	}
+	if !c.wideRebindOK(name, n) || !c.mixedReadOK(name, n) { // before the left operand is built
 		return Stmt{}, false
 	}
 	if !c.typed(n) {
@@ -597,7 +641,30 @@ func (c *progCtx) opAssign(n *Node, refVar string) (Stmt, bool) {
 	return Stmt{Kind: "assign", Var: name, Val: e, Pos: c.z.pos(c.a, n)}, true
 }
 
+// wideRebindOK refuses an assignment to a name that holds a u64 ctx.read value (such a name is bound once).
+func (c *progCtx) wideRebindOK(name string, n *Node) bool {
+	if info, ok := c.env[name]; ok && info.Wide {
+		c.add(Rejected, SB014SemanticGap, n, "`%s` holds a u64 ctx.read value and is bound once — narrow it into a new name (`y = %s & M` or `y = %s >> K`)", name, name, name)
+		return false
+	}
+	return true
+}
+
+// mixedReadOK refuses a read of a name that is a u64 ctx.read value on one path and an Integer on another.
+func (c *progCtx) mixedReadOK(name string, n *Node) bool {
+	if info, ok := c.env[name]; ok && info.Mixed {
+		c.add(Rejected, SB014SemanticGap, n, "`%s` is a u64 ctx.read value on one path and an Integer on another — bind the narrowed value to a new name on every path", name)
+		return false
+	}
+	return true
+}
+
+// valueOK reports whether the expression may be stored in a local as a value (a u64 load is not stored in a local).
 func (c *progCtx) valueOK(e *Expr, n *Node) bool {
+	if e.Wide && e.Kind == "var" { // a u64 ctx.read value
+		c.add(Rejected, SB014SemanticGap, n, "a u64 ctx.read value %s does not fit Ruby's Integer — narrow it first (`x & M` or `x >> K`), or pass it straight to a u64 map or record member", e.Iv)
+		return false
+	}
 	if e.Wide {
 		c.add(Rejected, SB014SemanticGap, n, "a u64 value %s (a u64 map value or BPF.ktime_ns) does not fit Ruby's Integer — narrow it first (`x & M` or `x >> K`), or pass it straight to a u64 map or record member", e.Iv)
 		return false
@@ -605,10 +672,11 @@ func (c *progCtx) valueOK(e *Expr, n *Node) bool {
 	return true
 }
 
+// ifStmt translates `if` / `elsif` / `else` / `unless` (the condition is a bool).
 func (c *progCtx) ifStmt(n *Node, refVar string) (Stmt, bool) {
 	pred := c.a.ref(n, "predicate")
 	if c.readsBad(pred) {
-		return Stmt{}, false
+		return Stmt{}, false // follows from a refused binding or local — do not report again
 	}
 	if pred != nil && pred.Type == "LocalVariableReadNode" && c.refs[pred.Str["name"]] != nil {
 		c.add(Rejected, SB005RefCheckShape, n, "`if %s` is accepted only right after `%s = M.lookup(k)`", pred.Str["name"], pred.Str["name"])
@@ -640,7 +708,7 @@ func (c *progCtx) ifStmt(n *Node, refVar string) (Stmt, bool) {
 		elseNode = c.a.ref(n, "else_clause")
 	}
 	pre := c.env
-	c.env = narrowEnv(pre, cond, true)
+	c.env = narrowEnv(pre, cond, true) // narrow the locals' intervals in the condition's true arm
 	savedArm := c.escArm
 	if c.escArm != "window" {
 		c.escArm = "if"
@@ -649,7 +717,7 @@ func (c *progCtx) ifStmt(n *Node, refVar string) (Stmt, bool) {
 	s := Stmt{Kind: "if", Cond: cond, Pos: c.z.pos(c.a, n)}
 	s.Then = c.stmts(thenN, refVar)
 	thenEnv := c.env
-	c.env = narrowEnv(pre, cond, false)
+	c.env = narrowEnv(pre, cond, false) // the false arm (else / elsif) narrows with the negation
 	if elseNode != nil {
 		switch elseNode.Type {
 		case "ElseNode":
@@ -658,7 +726,7 @@ func (c *progCtx) ifStmt(n *Node, refVar string) (Stmt, bool) {
 				elseN = c.a.arr(st, "body")
 			}
 			s.Else = c.stmts(elseN, refVar)
-		case "IfNode":
+		case "IfNode": // elsif — an if inside the else
 			if es, ok := c.ifStmt(elseNode, refVar); ok {
 				s.Else = []Stmt{es}
 			}
@@ -670,10 +738,11 @@ func (c *progCtx) ifStmt(n *Node, refVar string) (Stmt, bool) {
 	return s, true
 }
 
+// joinArms returns the environment after two arms — an arm that ends in break / next does not join.
 func joinArms(pre, a, b map[string]*varInfo, escA, escB bool) map[string]*varInfo {
 	switch {
 	case escA && escB:
-		return copyEnv(pre)
+		return copyEnv(pre) // unreachable — the statements after it are analysed with the earlier values
 	case escA:
 		return b
 	case escB:
@@ -682,6 +751,8 @@ func joinArms(pre, a, b map[string]*varInfo, escA, escB bool) map[string]*varInf
 	return joinEnv(a, b)
 }
 
+// cond translates a condition (only an expression Spinel infers as bool — this closes, by structure, the gap that Ruby treats 0
+// as true and nil as false).
 func (c *progCtx) cond(n *Node, refVar string) *Expr {
 	if n == nil || !c.typed(n) {
 		return nil
@@ -701,8 +772,10 @@ func (c *progCtx) cond(n *Node, refVar string) *Expr {
 	return e
 }
 
+// expr reads an expression and checks its type (as Spinel inferred it) and its interval. It returns nil after reporting a
+// stopping verdict.
 func (c *progCtx) expr(n *Node, refVar string) *Expr {
-	if n == nil || c.callsBadFunc(n) {
+	if n == nil || c.callsBadFunc(n) { // an expression that calls a refused subprogram is not analysed
 		return nil
 	}
 	p := c.z.pos(c.a, n)
@@ -735,7 +808,7 @@ func (c *progCtx) expr(n *Node, refVar string) *Expr {
 	case "LocalVariableReadNode":
 		name := n.Str["name"]
 		if c.badBind[name] || (c.poisoned[name] && c.env[name] == nil) {
-			return nil
+			return nil // follows from a refused binding or local — do not report again
 		}
 		if name == c.param {
 			c.add(Rejected, SB001UnsupportedConstruct, n, "the context `%s` is used only as %s", c.param, ctxUse(c.ctxKindOf(), c.param))
@@ -745,15 +818,15 @@ func (c *progCtx) expr(n *Node, refVar string) *Expr {
 			c.add(Rejected, SB005RefCheckShape, n, "`%s` may be read only as `if %s` and as `%s.load` inside it", name, name, name)
 			return nil
 		}
-		if c.kptrs[name] != nil {
+		if c.kptrs[name] != nil { // a kernel pointer local
 			c.kptrMisuse(n, name)
 			return nil
 		}
-		if c.kchecked[name] {
+		if c.kchecked[name] { // outside the then
 			c.add(Rejected, SB005RefCheckShape, n, "`%s` (a nullable kernel pointer) may be read only as `if %s` and as `%s.load.m` / `%s.ptr(…)` inside it", name, name, name, name)
 			return nil
 		}
-		if c.ostrs[name] {
+		if c.ostrs[name] { // an output_str result
 			c.add(Rejected, SB005RefCheckShape, n, "`%s` (an output_str result) may be read only as `if %s` and as `%s.status` inside it", name, name, name)
 			return nil
 		}
@@ -769,7 +842,10 @@ func (c *progCtx) expr(n *Node, refVar string) *Expr {
 		if !c.typed(n) {
 			return nil
 		}
-		return &Expr{Kind: "var", Var: name, Bool: info.Bool, Iv: info.Iv, Pos: p}
+		if !c.mixedReadOK(name, n) {
+			return nil
+		}
+		return &Expr{Kind: "var", Var: name, Bool: info.Bool, Iv: info.Iv, Wide: info.Wide, Pos: p}
 	case "AndNode", "OrNode":
 		l, r := c.a.ref(n, "left"), c.a.ref(n, "right")
 		sideEffect := false
@@ -792,7 +868,7 @@ func (c *progCtx) expr(n *Node, refVar string) *Expr {
 			k = "or"
 		}
 		return &Expr{Kind: k, Args: []*Expr{le, re}, Bool: true, Pos: p}
-	case "IfNode":
+	case "IfNode": // the ternary `c ? a : b` (an IfNode in Prism) — one expression in each arm
 		cond := c.cond(c.a.ref(n, "predicate"), refVar)
 		st, sub := c.a.ref(n, "statements"), c.a.ref(n, "subsequent")
 		if cond == nil {
@@ -819,8 +895,8 @@ func (c *progCtx) expr(n *Node, refVar string) *Expr {
 	case "CallNode":
 		return c.callExpr(n, refVar)
 	case "ConstantPathNode":
-		if v, ok := errnoConsts[constName(c.a, n)]; ok {
-			if mutation("hash-errno") && v == -2 {
+		if v, ok := errnoConsts[constName(c.a, n)]; ok { // BPF::ENOENT etc. (a negative errno to compare with a status)
+			if mutation("hash-errno") && v == -2 { // mutation control (test build only): the errno with the wrong sign
 				v = 2
 			}
 			lit := big.NewInt(v)
@@ -831,20 +907,21 @@ func (c *progCtx) expr(n *Node, refVar string) *Expr {
 	return nil
 }
 
+// callExpr translates a CallNode that is an operator, a comparison or `p.load`.
 func (c *progCtx) callExpr(n *Node, refVar string) *Expr {
 	name := n.Str["name"]
 	p := c.z.pos(c.a, n)
 	recv := c.a.ref(n, "receiver")
 	as := args(c.a, n)
-	if c.isIterCall(n) {
+	if c.isIterCall(n) { // the value of a loop (its receiver or a break value — Spinel types a times with a break as poly)
 		c.add(Rejected, SB030LoopShape, n, "the value of `%s` (its receiver, or a break value) is not used on the eBPF side — write the loop as a statement and keep results in locals", name)
 		return nil
 	}
-	if recv == nil && len(as) == 0 && c.a.ref(n, "block") == nil && c.blockLocals[name] {
+	if recv == nil && len(as) == 0 && c.a.ref(n, "block") == nil && c.blockLocals[name] { // after the loop, Ruby reads the name of a block local as a method call
 		c.add(Rejected, SB030LoopShape, n, "`%s` was first assigned inside a loop block — Ruby does not keep it after the loop (it reads a method call); assign it before the loop", name)
 		return nil
 	}
-	if recv != nil && recv.Type == "ConstantReadNode" {
+	if recv != nil && recv.Type == "ConstantReadNode" { // a global read
 		if g := c.z.globals[recv.Str["name"]]; g != nil {
 			return c.globalRead(n, g, name, as, p)
 		}
@@ -866,7 +943,7 @@ func (c *progCtx) callExpr(n *Node, refVar string) *Expr {
 		c.add(Rejected, SB002UnsupportedCall, n, "`%s` is a statement, not a value (its result is not used on the eBPF side)", name)
 		return nil
 	}
-	if name == "[]" && recv != nil && recv.Type == "CallNode" && refVar != "" {
+	if name == "[]" && recv != nil && recv.Type == "CallNode" && refVar != "" { // p.load.m[k]
 		if ld := c.a.ref(recv, "receiver"); ld != nil && ld.Type == "CallNode" && ld.Str["name"] == "load" && c.isVarRead(c.a.ref(ld, "receiver"), refVar) && c.refMap[refVar].Record != nil {
 			return c.elemRead(n, recv, ld, refVar)
 		}
@@ -878,7 +955,7 @@ func (c *progCtx) callExpr(n *Node, refVar string) *Expr {
 		c.add(Rejected, SB005RefCheckShape, n, "`%s.load` of a record is not a value — read a member (`%s.load.<member>`)", refVar, refVar)
 		return nil
 	}
-	if name == "load" && c.isKptrRead(recv) {
+	if name == "load" && c.isKptrRead(recv) { // `t.load` (as a value) on a kernel pointer — before the general p.load rule
 		c.kptrMisuse(n, recv.Str["name"])
 		return nil
 	}
@@ -912,17 +989,17 @@ func (c *progCtx) callExpr(n *Node, refVar string) *Expr {
 	if !hasPacket(c.prog.Kind) && recv != nil && c.isVarRead(recv, c.param) {
 		return c.tracingRead(n, name, as, p)
 	}
-	if c.prog.Kind == "flow_dissector" && (name == "key" || name == "set_key") && recv != nil && c.isVarRead(recv, c.param) {
+	if c.prog.Kind == "flow_dissector" && (name == "key" || name == "set_key") && recv != nil && c.isVarRead(recv, c.param) { // the flow dissector's key
 		if name == "set_key" {
 			c.add(Rejected, SB002UnsupportedCall, n, "`%s.set_key(…)` is a statement — not a value", c.param)
 			return nil
 		}
 		return c.flowKeyRead(n, refVar)
 	}
-	if c.prog.Kind == "xdp" && (name == "adjust_head" || name == "adjust_tail") && recv != nil && c.isVarRead(recv, c.param) {
+	if c.prog.Kind == "xdp" && (name == "adjust_head" || name == "adjust_tail") && recv != nil && c.isVarRead(recv, c.param) { // XDP packet head / tail adjustment
 		return c.adjustPkt(n, refVar)
 	}
-	if ctxFields[c.prog.Kind][name] && recv != nil && c.isVarRead(recv, c.param) {
+	if ctxFields[c.prog.Kind][name] && recv != nil && c.isVarRead(recv, c.param) { // an integer field of a packet kind's context (on the same context as the window)
 		return c.tracingRead(n, name, as, p)
 	}
 	if _, ok := windowReads[name]; ok {
@@ -938,27 +1015,27 @@ func (c *progCtx) callExpr(n *Node, refVar string) *Expr {
 		}
 		return c.ringOutput(n, refVar)
 	}
-	if c.isOutputStr(n) {
+	if c.isOutputStr(n) { // output_str as a value (a condition, an operand or an argument) is not accepted
 		c.add(Rejected, SB025DroppedEvent, n, "the result of output_str is accepted only as %s", outputStrShape(c.ringOf(recv)))
 		return nil
 	}
-	if (name == "status" || name == "sent") && recv != nil && recv.Type == "LocalVariableReadNode" && c.ostrs[recv.Str["name"]] {
+	if (name == "status" || name == "sent") && recv != nil && recv.Type == "LocalVariableReadNode" && c.ostrs[recv.Str["name"]] { // r.status / r.sent
 		return c.ostrStatus(n, recv, p)
 	}
-	if q := c.kcheckedRoot(n); q != "" {
+	if q := c.kcheckedRoot(n); q != "" { // a read of a nullable kernel pointer outside the then (`q.load.m` etc.)
 		c.add(Rejected, SB005RefCheckShape, n, "`%s` (a nullable kernel pointer) may be read only as `if %s` and as `%s.load.m` / `%s.ptr(…)` inside it", q, q, q, q)
 		return nil
 	}
-	if e, ok := c.kpathRead(n, p); ok {
+	if e, ok := c.kpathRead(n, p); ok { // t.load.a.b (a path through an embedded struct)
 		return e
 	}
-	if recv != nil && recv.Type == "CallNode" && recv.Str["name"] == "load" && c.isKptrRead(c.a.ref(recv, "receiver")) {
+	if recv != nil && recv.Type == "CallNode" && recv.Str["name"] == "load" && c.isKptrRead(c.a.ref(recv, "receiver")) { // t.load.m
 		return c.kfieldRead(n, recv, p)
 	}
-	if name == "addr" && recv != nil && c.isKptrRead(recv) {
+	if name == "addr" && recv != nil && c.isKptrRead(recv) { // the address of a checked kernel pointer (ebpf.kptr.addr) — before kptrMisuse
 		return c.kaddrRead(n, recv, p)
 	}
-	if recv != nil && c.isKptrRead(recv) {
+	if recv != nil && c.isKptrRead(recv) { // t.ptr / t.copy / t.load (as a value) — stage B / C forms or a use as a value
 		c.kptrMisuse(n, recv.Str["name"])
 		return nil
 	}
@@ -971,6 +1048,7 @@ func (c *progCtx) callExpr(n *Node, refVar string) *Expr {
 			c.add(Rejected, SB011ShadowedName, n, "`BPF.pid_tgid` resolves to %q (with %d arguments), not the library's BPF.pid_tgid", callee, len(as))
 			return nil
 		}
+		// the u64 tgid << 32 | pid — Wide like ktime (only copied to a u64, `& M` or `>> K`)
 		return &Expr{Kind: "pidtgid", Iv: iv(new(big.Int), new(big.Int).Set(u64Max)), Wide: true, Pos: p}
 	}
 	if name == "ktime_ns" && constName(c.a, recv) == "BPF" {
@@ -982,6 +1060,7 @@ func (c *progCtx) callExpr(n *Node, refVar string) *Expr {
 			c.add(Rejected, SB011ShadowedName, n, "`BPF.ktime_ns` resolves to %q (with %d arguments), not the library's BPF.ktime_ns", callee, len(as))
 			return nil
 		}
+		// a u64 time — it does not fit Ruby's Integer (i64) (Wide: only copied to a u64, `& M` or `>> K`)
 		return &Expr{Kind: "ktime", Iv: iv(new(big.Int), new(big.Int).Set(u64Max)), Wide: true, Pos: p}
 	}
 	if name == "**" {
@@ -993,14 +1072,14 @@ func (c *progCtx) callExpr(n *Node, refVar string) *Expr {
 		c.add(Rejected, SB024RecordShape, n, "a record value `%s.new(…)` is written directly as the argument of the map / ring buffer call that takes it (key, value or event) — it is not kept in a local or used as another value (bpf-mlir: a record.make result does not cross blocks)", constName(c.a, recv))
 		return nil
 	}
-	if fi := c.z.userCall(c.a, n); fi != nil && !isOp {
+	if fi := c.z.userCall(c.a, n); fi != nil && !isOp { // a call to an eBPF-side subprogram
 		return c.subCall(n, fi, refVar)
 	}
 	if !isOp {
 		c.add(Rejected, SB002UnsupportedCall, n, "call `%s` is not accepted on the eBPF side", name)
 		return nil
 	}
-	if _, ok := c.calleeOp(n, !mutation("no-member-recv") && c.memberRead(recv)); !ok {
+	if _, ok := c.calleeOp(n, !mutation("no-member-recv") && c.memberRead(recv)); !ok { // check the type, the dispatch and redefinition (SB009) (a boxed dispatch is also accepted when the receiver is a record member read)
 		return nil
 	}
 	switch name {
@@ -1045,6 +1124,7 @@ func (c *progCtx) callExpr(n *Node, refVar string) *Expr {
 	return c.binary(n, name, l, r, as[0])
 }
 
+// intExpr translates an Integer expression (where a u64 load cannot be used as is).
 func (c *progCtx) intExpr(n *Node, refVar string) *Expr {
 	e := c.expr(n, refVar)
 	if e == nil {
@@ -1061,8 +1141,9 @@ func (c *progCtx) intExpr(n *Node, refVar string) *Expr {
 	return e
 }
 
+// fits checks that the result's interval fits in i64.
 func (c *progCtx) fits(n *Node, e *Expr) bool {
-	if mutation("no-overflow") {
+	if mutation("no-overflow") { // mutation control (test build only — mutation_on.go): mimics a frontend that forgets the overflow check, clamps the interval to i64 and goes on
 		if !e.Iv.fitsI64() {
 			e.Iv = fullI64
 		}
@@ -1075,6 +1156,8 @@ func (c *progCtx) fits(n *Node, e *Expr) bool {
 	return true
 }
 
+// binary translates a binary operator (+ − × & | ^ << >> / %). rn is the right operand's node (the position reported by the
+// constant check).
 func (c *progCtx) binary(n *Node, op string, l, r *Expr, rn *Node) *Expr {
 	p := c.z.pos(c.a, n)
 	if l.Bool || r.Bool {
@@ -1092,12 +1175,16 @@ func (c *progCtx) binary(n *Node, op string, l, r *Expr, rn *Node) *Expr {
 	}
 	switch op {
 	case "&":
-		if l.Wide {
+		if l.Wide { // a u64 load & M (a literal M ≥ 0) — the result is in [0, M]
 			m, ok := constRight("mask")
 			if !ok {
 				return nil
 			}
 			if m.Sign() < 0 {
+				if l.Kind == "var" { // a u64 ctx.read value
+					c.add(Rejected, SB014SemanticGap, rn, "a u64 ctx.read value may be masked only with a non-negative literal")
+					return nil
+				}
 				c.add(Rejected, SB014SemanticGap, rn, "a u64 map value may be masked only with a non-negative literal")
 				return nil
 			}
@@ -1105,6 +1192,10 @@ func (c *progCtx) binary(n *Node, op string, l, r *Expr, rn *Node) *Expr {
 			return e
 		}
 		if r.Wide {
+			if r.Kind == "var" { // a u64 ctx.read value
+				c.add(Rejected, SB014SemanticGap, n, "write the u64 ctx.read value on the left of `&` with a literal mask (`r & M`)")
+				return nil
+			}
 			c.add(Rejected, SB014SemanticGap, n, "write the u64 map value on the left of `&` with a literal mask (`p.load & M`)")
 			return nil
 		}
@@ -1165,7 +1256,7 @@ func (c *progCtx) binary(n *Node, op string, l, r *Expr, rn *Node) *Expr {
 			return nil
 		}
 		switch {
-		case l.Iv.nonNeg() && d.Sign() > 0:
+		case l.Iv.nonNeg() && d.Sign() > 0: // (a) a non-negative dividend and a positive divisor — floor and truncation agree
 			e.Div = "u"
 			if op == "/" {
 				e.Iv = iv(new(big.Int).Quo(l.Iv.Lo, d), new(big.Int).Quo(l.Iv.Hi, d))
@@ -1176,7 +1267,7 @@ func (c *progCtx) binary(n *Node, op string, l, r *Expr, rn *Node) *Expr {
 				}
 				e.Iv = iv(new(big.Int), hi)
 			}
-		case isPow2Mag(d):
+		case isPow2Mag(d): // (b) ±2^k — floordivsi and the floor remainder, expanded (the bpf-mlir v0.8.0 contract)
 			e.Div = "floor"
 			if op == "/" {
 				e.Iv = minMax(floorDiv(l.Iv.Lo, d), floorDiv(l.Iv.Hi, d))
@@ -1189,7 +1280,7 @@ func (c *progCtx) binary(n *Node, op string, l, r *Expr, rn *Node) *Expr {
 			c.add(Rejected, SB014SemanticGap, n, "`%s %s` with a possibly negative dividend %s needs a divisor of ±2^k (Ruby floors; bpf-mlir divides i64 signed only by ±2^k)", op, d, l.Iv)
 			return nil
 		}
-	default:
+	default: // + - *
 		if l.Wide || r.Wide {
 			if l.Wide {
 				c.valueOK(l, n)
@@ -1213,6 +1304,10 @@ func (c *progCtx) binary(n *Node, op string, l, r *Expr, rn *Node) *Expr {
 	return e
 }
 
+// memberRead reports whether the node is, syntactically, a member read `p.load.m` through the borrow of a record map's lookup
+// (m being a non-padding integer member). Several classes of the library make a RecordRef#load, so it is poly (polymorphic) in
+// Spinel — when a member's name collides with a builtin method (String#b, String#bytes, Array#first, …) the member read is poly
+// too. The frontend knows from the record declaration that it is an integer.
 func (c *progCtx) memberRead(n *Node) bool {
 	if n == nil || n.Type != "CallNode" || len(args(c.a, n)) != 0 || c.a.ref(n, "block") != nil {
 		return false
@@ -1233,6 +1328,7 @@ func (c *progCtx) memberRead(n *Node) bool {
 	return f != nil && !f.Pad
 }
 
+// hasMemberRead reports whether a record member read `p.load.m` lies under the node (for the hint in the SB004 message).
 func (c *progCtx) hasMemberRead(n *Node) bool {
 	found := false
 	walk(c.a, n, func(x *Node) bool {
@@ -1244,6 +1340,9 @@ func (c *progCtx) hasMemberRead(n *Node) bool {
 	return found
 }
 
+// calleeOp checks the callee of a builtin operator call. Only when memberRecv is set (the receiver is a record member read) does
+// it accept a boxed codegen dispatch (a switch, a codegen record count other than one, and a user definition (SB009) still stop;
+// any other poly is SB004 — fail closed).
 func (c *progCtx) calleeOp(n *Node, memberRecv bool) (string, bool) {
 	if !memberRecv {
 		return c.callee(n)
@@ -1268,6 +1367,8 @@ func (c *progCtx) calleeOp(n *Node, memberRecv bool) (string, bool) {
 	return "", true
 }
 
+// callee checks the call's codegen record and returns the callee (switch / boxed / none → SB004; an operator with a callee →
+// SB009).
 func (c *progCtx) callee(n *Node) (string, bool) {
 	if !c.typed(n) {
 		return "", false
@@ -1284,7 +1385,7 @@ func (c *progCtx) callee(n *Node) (string, bool) {
 	}
 	if cg.Dispatch != "direct" {
 		hint := ""
-		if operators[name] && c.hasMemberRead(c.a.ref(n, "receiver")) {
+		if operators[name] && c.hasMemberRead(c.a.ref(n, "receiver")) { // hint for an operator on record member arithmetic
 			hint = "; for an operator on a record member's arithmetic, assign it to a local first (`x = p.load.m & 0xFF`, then `x + 1`)"
 		}
 		c.add(Unknown, SB004UnknownEdge, n, "`%s` is dispatched dynamically (%s %v) — the eBPF side needs a static call target%s", name, cg.Dispatch, cg.Candidates, hint)
@@ -1293,6 +1394,7 @@ func (c *progCtx) callee(n *Node) (string, bool) {
 	return cg.Callee, true
 }
 
+// mapOf resolves a read of a map constant.
 func (c *progCtx) mapOf(recv *Node, call *Node) *MapDecl {
 	if recv != nil && !c.typed(recv) {
 		return nil
@@ -1300,7 +1402,7 @@ func (c *progCtx) mapOf(recv *Node, call *Node) *MapDecl {
 	cn := constName(c.a, recv)
 	m := c.z.maps[cn]
 	if m == nil && c.z.badMaps[cn] {
-		return nil
+		return nil // a map whose declaration was refused — the use does not report again
 	}
 	if m == nil || recv.Type != "ConstantReadNode" {
 		c.add(Rejected, SB002UnsupportedCall, call, "`%s` needs a map declared at the top level (`X = BPF::ArrayMap.new(\"X\", …)`) as its receiver", call.Str["name"])
@@ -1315,6 +1417,7 @@ func (c *progCtx) mapOf(recv *Node, call *Node) *MapDecl {
 	return m
 }
 
+// typeRange returns the range of a map's value type for a store (for u64 the upper end is Ruby's Integer limit 2^63−1).
 func typeRange(m *MapDecl) Ival {
 	switch {
 	case m.ValueBits == 32 && !m.Signed:
@@ -1327,9 +1430,10 @@ func typeRange(m *MapDecl) Ival {
 	return iv(new(big.Int), new(big.Int).Set(i64Max))
 }
 
+// key translates a map key (its interval must be within [0, max_entries − 1] — SB020).
 func (c *progCtx) key(n *Node, m *MapDecl, refVar string) *Expr {
 	if m.IsHash() {
-		return c.hashKey(n, m, refVar)
+		return c.hashKey(n, m, refVar) // a hash key (its range is its type's — SB020 is for arrays only)
 	}
 	e := c.expr(n, refVar)
 	if e == nil {
@@ -1351,6 +1455,8 @@ func (c *progCtx) key(n *Node, m *MapDecl, refVar string) *Expr {
 	return e
 }
 
+// value translates the value of a store (its interval must be within the range of the map's value type — no implicit truncation;
+// a u64 load may only be copied to a u64 map).
 func (c *progCtx) value(n *Node, m *MapDecl, refVar string, role string) *Expr {
 	e := c.expr(n, refVar)
 	if e == nil {
@@ -1361,8 +1467,8 @@ func (c *progCtx) value(n *Node, m *MapDecl, refVar string, role string) *Expr {
 		return nil
 	}
 	if e.Wide {
-		if m.ValueBits == 64 && !m.Signed && (e.Kind == "load" || e.Kind == "ktime" || e.Kind == "pidtgid" || e.Kind == "retval" || e.Kind == "kparg" || e.Kind == "rawarg" || e.Kind == "tpfield" || e.Kind == "gload" || e.Kind == "kfload") {
-			return e
+		if m.ValueBits == 64 && !m.Signed && ((e.Kind == "var" && e.Wide) || e.Kind == "load" || e.Kind == "ktime" || e.Kind == "pidtgid" || e.Kind == "retval" || e.Kind == "kparg" || e.Kind == "rawarg" || e.Kind == "tpfield" || e.Kind == "gload" || e.Kind == "kfload") {
+			return e // a copy of a u64 value (the first example program, a time)
 		}
 		c.valueOK(e, n)
 		return nil
@@ -1379,12 +1485,17 @@ func (c *progCtx) value(n *Node, m *MapDecl, refVar string, role string) *Expr {
 	return e
 }
 
+// rmwFirst checks syntactically, before the value expression is read, whether the node of an update's value reads a lookup local
+// of the same map (the second in the order of reasons: SB019 for a read-modify-write (RMW) comes before SB014 for the value's
+// interval, so an overflow inside the value expression (a u64 + 1 etc.) does not hide a non-atomic RMW). The key condition is the
+// same as in the later check with readsMap (it accepts when the lookup key and the update key are different literals). It returns
+// true when it reported SB019. When k is nil (the key was refused) it does not look.
 func (c *progCtx) rmwFirst(n, val *Node, m *MapDecl, k *Expr, msg func(ref string) string) bool {
-	c.noteFlow(val, m, n)
+	c.noteFlow(val, m, n) // SB019 flows across functions
 	if k == nil || c.exempt(m) {
 		return false
 	}
-	for _, ref := range sortedSet(c.derivedRefs(val)) {
+	for _, ref := range sortedSet(c.derivedRefs(val)) { // direct reads and the origins of locals
 		if c.refMap[ref] != m {
 			continue
 		}
@@ -1397,14 +1508,15 @@ func (c *progCtx) rmwFirst(n, val *Node, m *MapDecl, k *Expr, msg func(ref strin
 	return false
 }
 
+// derivedRefs returns the direct reads of lookup locals inside the node and the origins of the values of the locals it reads.
 func (c *progCtx) derivedRefs(n *Node) map[string]bool {
 	out := map[string]bool{}
 	walk(c.a, n, func(x *Node) bool {
-		if c.z.funcs != nil && c.z.userCall(c.a, x) != nil {
+		if c.z.funcs != nil && c.z.userCall(c.a, x) != nil { // a subprogram's result (`@r<site>` — where its arguments came from is relayed through the callee's R)
 			out[fmt.Sprintf("@r%d", x.ID)] = true
 			return false
 		}
-		if g := c.counterRead(x); g != nil && !mutation("no-counter-rmw") {
+		if g := c.counterRead(x); g != nil && !mutation("no-counter-rmw") { // a read of a Counter's value (`@g<Const>`) — the mutation control removes the mark
 			out["@g"+g.Const] = true
 			return false
 		}
@@ -1424,13 +1536,15 @@ func (c *progCtx) derivedRefs(n *Node) map[string]bool {
 	return out
 }
 
+// origin returns the origins of an assigned value (derivedRefs — the mutation control no-origin makes it empty).
 func (c *progCtx) origin(n *Node) map[string]bool {
-	if mutation("no-origin") {
+	if mutation("no-origin") { // mutation control (test build only): removes the propagation of origins into locals
 		return nil
 	}
 	return c.derivedRefs(n)
 }
 
+// readsRefVia reports whether the node reads the lookup local ref directly, or reads a local whose origin is ref.
 func (c *progCtx) readsRefVia(n *Node, ref string) bool {
 	return c.derivedRefs(n)[ref]
 }
@@ -1461,6 +1575,7 @@ func sortedSet(m map[string]bool) []string {
 	return out
 }
 
+// readsMap reports whether the expression contains a load from a lookup of map m (a read-modify-write of a shared map — SB019).
 func readsMap(e *Expr, m *MapDecl) (string, bool) {
 	if e == nil {
 		return "", false
@@ -1476,9 +1591,10 @@ func readsMap(e *Expr, m *MapDecl) (string, bool) {
 	return "", false
 }
 
+// mapCall translates `M.atomic_add(k, d)` / `M.update(k, v)`.
 func (c *progCtx) mapCall(n *Node, refVar string) (Stmt, bool) {
 	name := n.Str["name"]
-	if r := c.a.ref(n, "receiver"); r != nil && r.Type == "ConstantReadNode" {
+	if r := c.a.ref(n, "receiver"); r != nil && r.Type == "ConstantReadNode" { // a counter's add
 		if g := c.z.globals[r.Str["name"]]; g != nil {
 			if name == "add" {
 				return c.globalAdd(n, g, args(c.a, n), refVar)
@@ -1494,14 +1610,14 @@ func (c *progCtx) mapCall(n *Node, refVar string) (Stmt, bool) {
 		c.add(Rejected, SB028TracingKind, n, "a bare `%s.%s` statement — the %s context is read only as a value (%s)", c.param, name, c.prog.Kind, ctxReads[c.prog.Kind])
 		return Stmt{}, false
 	}
-	if c.prog.Kind == "flow_dissector" && name == "set_key" && c.isVarRead(c.a.ref(n, "receiver"), c.param) {
+	if c.prog.Kind == "flow_dissector" && name == "set_key" && c.isVarRead(c.a.ref(n, "receiver"), c.param) { // `ctx.set_key(:f, [i,] v)`
 		return c.flowKeyStore(n, refVar)
 	}
-	if c.prog.Kind == "sched_cls" && name == "mark=" && c.isVarRead(c.a.ref(n, "receiver"), c.param) {
+	if c.prog.Kind == "sched_cls" && name == "mark=" && c.isVarRead(c.a.ref(n, "receiver"), c.param) { // `skb.mark = v` (ebpf.ctx.field.store)
 		return c.ctxStore(n, refVar)
 	}
 	if c.readsBad(n) {
-		return Stmt{}, false
+		return Stmt{}, false // follows from a refused binding or local — do not report again
 	}
 	if dm := c.z.maps[constName(c.a, c.a.ref(n, "receiver"))]; dm != nil && dm.IsLpm() && name != "lookup" && name != "check" && !operators[name] {
 		c.add(Rejected, SB002UnsupportedCall, n, "`%s.%s` is not accepted — an lpm_trie is read-only on the eBPF side (look it up with `p = %s.lookup(a0, a1, a2, a3)` then `if p`; user space writes it with `obj.lpm_put`)", dm.Const, name, dm.Const)
@@ -1525,7 +1641,7 @@ func (c *progCtx) mapCall(n *Node, refVar string) (Stmt, bool) {
 		return Stmt{}, false
 	}
 	if c.z.badHash[constName(c.a, c.a.ref(n, "receiver"))] && name == "atomic_add" {
-		return Stmt{}, false
+		return Stmt{}, false // a hash map whose declaration was refused — do not report again
 	}
 	if dm := c.z.maps[constName(c.a, c.a.ref(n, "receiver"))]; dm != nil && dm.Record != nil && name == "atomic_add" {
 		c.add(Rejected, SB002UnsupportedCall, n, "`%s.atomic_add` is not accepted on a record map — add to a member with `p = %s.lookup(k)`, `if p`, `p.atomic_add(:member, d)`", dm.Const, dm.Const)
@@ -1557,7 +1673,7 @@ func (c *progCtx) mapCall(n *Node, refVar string) (Stmt, bool) {
 	}
 	role := map[string]string{"atomic_add": "delta", "update": "value"}[name]
 	k := c.key(as[0], m, refVar)
-	if name == "atomic_add" && c.rmwFirst(n, as[1], m, k, func(ref string) string {
+	if name == "atomic_add" && c.rmwFirst(n, as[1], m, k, func(ref string) string { // adds a value read from the same entry (consistent with p.atomic_add and add_or_init)
 		return fmt.Sprintf("`%s.atomic_add` adds a value read from the same entry (`%s.load`) — concurrent CPUs interleave the read and the add; use a delta that does not read the map (keys must be different literals to accept this form)", m.Name, ref)
 	}) {
 		return Stmt{}, false
@@ -1571,7 +1687,7 @@ func (c *progCtx) mapCall(n *Node, refVar string) (Stmt, bool) {
 	if k == nil || v == nil {
 		return Stmt{}, false
 	}
-	if ref, ok := readsMap(v, m); ok && name == "update" && !c.exempt(m) {
+	if ref, ok := readsMap(v, m); ok && name == "update" && !c.exempt(m) { // per-CPU maps are exempt
 		lk := c.refKey[ref]
 		if lk == nil || lk.Kind != "lit" || k.Kind != "lit" || lk.Lit.Cmp(k.Lit) == 0 {
 			c.add(Rejected, SB019SharedReadModifyWrite, n, "`%s.update` stores a value read from the same map (`%s.load`) — concurrent CPUs lose updates; use `%s.atomic_add` (keys must be different literals to accept this form)", m.Name, ref, m.Name)
@@ -1581,6 +1697,7 @@ func (c *progCtx) mapCall(n *Node, refVar string) (Stmt, bool) {
 	return Stmt{Kind: name, Map: m, Key: k, Value: v, Pos: c.z.pos(c.a, n)}, true
 }
 
+// lookupCheck translates `p = M.lookup(k)` + `if p … [else …] end`.
 func (c *progCtx) lookupCheck(w, ifn *Node, outerRef string) (Stmt, bool) {
 	name := w.Str["name"]
 	call := c.a.ref(w, "value")
@@ -1605,10 +1722,10 @@ func (c *progCtx) lookupCheck(w, ifn *Node, outerRef string) (Stmt, bool) {
 		}
 	}
 	if dm == nil && c.z.badMaps[constName(c.a, c.a.ref(call, "receiver"))] {
-		return Stmt{}, false
+		return Stmt{}, false // a map whose declaration was refused — do not report again
 	}
 	if callee == "RecordMap#lookup" && mapT != "RecordMap" {
-		return Stmt{}, false
+		return Stmt{}, false // the record map's declaration was already refused (SB024 / SB013) — do not report again
 	}
 	if callee != mapT+"#lookup" {
 		c.add(Rejected, SB011ShadowedName, call, "`lookup` resolves to %s, not BPF::%s#lookup", callee, mapT)
@@ -1620,7 +1737,7 @@ func (c *progCtx) lookupCheck(w, ifn *Node, outerRef string) (Stmt, bool) {
 		return Stmt{}, false
 	}
 	if m.IsLpm() && len(as) != 4 {
-		c.lpmKey(call, m, as, outerRef)
+		c.lpmKey(call, m, as, outerRef) // SB002 (four bytes)
 		return Stmt{}, false
 	}
 	if !m.IsLpm() && len(as) != 1 {
@@ -1636,7 +1753,7 @@ func (c *progCtx) lookupCheck(w, ifn *Node, outerRef string) (Stmt, bool) {
 	}
 	var k *Expr
 	if m.IsLpm() {
-		k = c.lpmKey(call, m, as, outerRef)
+		k = c.lpmKey(call, m, as, outerRef) // prefixlen 32 and four bytes
 	} else {
 		k = c.key(as[0], m, outerRef)
 	}
@@ -1655,7 +1772,7 @@ func (c *progCtx) lookupCheck(w, ifn *Node, outerRef string) (Stmt, bool) {
 	c.env = copyEnv(pre)
 	savedArm := c.escArm
 	if c.escArm != "window" {
-		c.escArm = "if"
+		c.escArm = "if" // an arm of ebpf.ref.check — break / next may be placed in it
 	}
 	defer func() { c.escArm = savedArm }()
 	s.Then = c.stmts(then, name)
@@ -1673,6 +1790,7 @@ func (c *progCtx) lookupCheck(w, ifn *Node, outerRef string) (Stmt, bool) {
 		s.Else = c.stmts(els, outerRef)
 	}
 	c.env = joinArms(pre, thenEnv, c.env, escapes(s.Then), escapes(s.Else))
+	// p is read only in the if's condition and as p.load inside then
 	walk(c.a, c.def, func(x *Node) bool {
 		if x.Type != "LocalVariableReadNode" || x.Str["name"] != name {
 			return true
@@ -1681,10 +1799,11 @@ func (c *progCtx) lookupCheck(w, ifn *Node, outerRef string) (Stmt, bool) {
 			return true
 		}
 		parent := c.a.node(c.a.Parent[x.ID])
-		if c.borrowArgUse(x) && inIf(c.a, x, ifn) {
+		if c.borrowArgUse(x) && inIf(c.a, x, ifn) { // the borrow inside present passed as a helper argument
 			return true
 		}
 		if m.Record != nil {
+			// record: p.load only for a direct member read or write (`p.load.m` / `p.load.m = e`), and p.atomic_add(:m, d)
 			if parent != nil && parent.Type == "CallNode" && c.a.ref(parent, "receiver") == x && inIf(c.a, parent, ifn) {
 				if parent.Str["name"] == "atomic_add" {
 					return true
@@ -1694,10 +1813,10 @@ func (c *progCtx) lookupCheck(w, ifn *Node, outerRef string) (Stmt, bool) {
 					return true
 				}
 				if parent.Str["name"] == "load" && gp != nil && strings.HasPrefix(gp.Type, "Call") && strings.HasSuffix(gp.Type, "WriteNode") && c.a.ref(gp, "receiver") == parent {
-					return true
+					return true // `p.load.m += d` — SB019 is reported on the statement side
 				}
 				if parent.Str["name"] == "load" && gp != nil && gp.Type == "CallNode" && c.a.ref(gp, "receiver") == parent && memberLike(gp.Str["name"]) {
-					return true
+					return true // an unknown member — fieldRead reports SB002
 				}
 			}
 			c.add(Rejected, SB005RefCheckShape, x, "`%s` may be read only as `if %s`, `%s.load.<member>` / `%s.load.<member> = e` and `%s.atomic_add(:member, d)` inside it — `%s.load` is not a value (no local, dup, comparison or argument: the kernel side writes the map entry directly)", name, name, name, name, name, name)
@@ -1712,6 +1831,7 @@ func (c *progCtx) lookupCheck(w, ifn *Node, outerRef string) (Stmt, bool) {
 	return s, true
 }
 
+// inIf reports whether x is inside the then arm of ifn.
 func inIf(a *AST, x, ifn *Node) bool {
 	st := a.ref(ifn, "statements")
 	for p := x.ID; ; {
@@ -1729,11 +1849,12 @@ func inIf(a *AST, x, ifn *Node) bool {
 	}
 }
 
+// verdict translates the last statement (`BPF::XDP_*` or `return BPF::XDP_*`).
 func (c *progCtx) verdict(n *Node) {
 	v := n
 	if n.Type == "ReturnNode" {
 		var as []*Node
-		if args := c.a.ref(n, "arguments"); args != nil {
+		if args := c.a.ref(n, "arguments"); args != nil { // a return without a value (`return`) has no arguments; the frontend used to read nil here and panic
 			as = c.a.arr(args, "arguments")
 		}
 		if len(as) != 1 {
@@ -1742,12 +1863,12 @@ func (c *progCtx) verdict(n *Node) {
 		}
 		v = as[0]
 	}
-	if c.isFmodReturn(v) {
+	if c.isFmodReturn(v) { // BPF.fmod_return in a fmod_ret program
 		c.fmodVerdict(n, v)
 		c.rejectMidReturns(n)
 		return
 	}
-	if v.Type == "CallNode" && v.Str["name"] == "redirect" {
+	if v.Type == "CallNode" && v.Str["name"] == "redirect" { // a redirect verdict
 		c.redirectVerdict(n, v)
 		return
 	}
@@ -1770,6 +1891,8 @@ func (c *progCtx) verdict(n *Node) {
 	c.rejectMidReturns(n)
 }
 
+// rejectMidReturns rejects every return other than the last statement n and the guards (apart from the guards, a return is accepted only as the last
+// statement).
 func (c *progCtx) rejectMidReturns(n *Node) {
 	walk(c.a, c.def, func(x *Node) bool {
 		if x.Type == "ReturnNode" && x != n && !c.guardReturns[x] {
@@ -1779,6 +1902,7 @@ func (c *progCtx) rejectMidReturns(n *Node) {
 	})
 }
 
+// condAssign returns the LocalVariableWriteNode of an assignment inside a condition (`if (w = …)`), or nil.
 func condAssign(a *AST, n *Node) *Node {
 	for n != nil && n.Type == "ParenthesesNode" {
 		b := a.ref(n, "body")
@@ -1793,6 +1917,7 @@ func condAssign(a *AST, n *Node) *Node {
 	return nil
 }
 
+// literalArg reads an argument that is an Integer literal (a non-constant is SB006).
 func (c *progCtx) literalArg(n *Node, what string) (*big.Int, bool) {
 	if n == nil || n.Type != "IntegerNode" {
 		c.add(Rejected, SB006NonConstant, n, "the %s must be an integer literal", what)
@@ -1804,6 +1929,9 @@ func (c *progCtx) literalArg(n *Node, what string) (*big.Int, bool) {
 	return c.z.literal(c.a, n)
 }
 
+// windowCheck translates `w = ctx.check(off, N)` + `if w … [else …] end`.
+// N is a literal in 1..65535 (SB022); off is an Integer expression whose interval lies within [0, 65535 − N] (SB023 — Ruby does
+// not wrap, and the interval rules out the different meaning a negative off would have).
 func (c *progCtx) windowCheck(w, ifn *Node, outerRef string) (Stmt, bool) {
 	name := w.Str["name"]
 	call := c.a.ref(w, "value")
@@ -1823,7 +1951,7 @@ func (c *progCtx) windowCheck(w, ifn *Node, outerRef string) (Stmt, bool) {
 	if !ok {
 		return Stmt{}, false
 	}
-	if want := ctxClass[c.ctxKindOf()] + "#check"; callee != want {
+	if want := ctxClass[c.ctxKindOf()] + "#check"; callee != want { // XdpMd#check, SkBuff#check
 		c.add(Rejected, SB011ShadowedName, call, "`check` resolves to %s, not BPF::%s", callee, want)
 		return Stmt{}, false
 	}
@@ -1868,7 +1996,7 @@ func (c *progCtx) windowCheck(w, ifn *Node, outerRef string) (Stmt, bool) {
 		return Stmt{}, false
 	}
 	hi := big.NewInt(65535 - n)
-	if !mutation("no-offset-range") && !off.Iv.within(bigZero, hi) {
+	if !mutation("no-offset-range") && !off.Iv.within(bigZero, hi) { // mutation control (test build only): removes the check of the offset's interval
 		c.add(Rejected, SB023PacketOffset, as[0], "the window offset's range %s is not within [0, %s] (65535 − %d) — a negative offset does not count from the end of the packet (unlike Ruby's a[-1]) and would silently give nil, Ruby does not wrap, and a packet offset beyond 0xffff has no meaning; narrow it (e.g. `x & 0xFFF`)", off.Iv, hi, n)
 		return Stmt{}, false
 	}
@@ -1883,7 +2011,7 @@ func (c *progCtx) windowCheck(w, ifn *Node, outerRef string) (Stmt, bool) {
 	c.env = copyEnv(pre)
 	info.active = true
 	savedArm := c.escArm
-	c.escArm = "window"
+	c.escArm = "window" // an arm of ebpf.packet.check — break / next may not be placed in it
 	defer func() { c.escArm = savedArm }()
 	s.Then = c.stmts(then, outerRef)
 	info.active = false
@@ -1901,6 +2029,7 @@ func (c *progCtx) windowCheck(w, ifn *Node, outerRef string) (Stmt, bool) {
 		s.Else = c.stmts(els, outerRef)
 	}
 	c.env = joinEnv(thenEnv, c.env)
+	// w is used only in the if's condition and as the receiver of reads (u8 / be16 / …) inside then
 	walk(c.a, c.def, func(x *Node) bool {
 		if x.Type != "LocalVariableReadNode" || x.Str["name"] != name {
 			return true
@@ -1909,14 +2038,14 @@ func (c *progCtx) windowCheck(w, ifn *Node, outerRef string) (Stmt, bool) {
 			return true
 		}
 		parent := c.a.node(c.a.Parent[x.ID])
-		if c.borrowArgUse(x) && inIf(c.a, x, ifn) {
+		if c.borrowArgUse(x) && inIf(c.a, x, ifn) { // the window inside in_range passed as a helper argument
 			return true
 		}
 		if parent != nil && parent.Type == "CallNode" && windowReads[parent.Str["name"]] > 0 && c.a.ref(parent, "receiver") == x && inIf(c.a, parent, ifn) {
 			return true
 		}
 		if parent != nil && parent.Type == "CallNode" && windowReads[parent.Str["name"]] == 0 && c.a.ref(parent, "receiver") == x && inIf(c.a, parent, ifn) {
-			return true
+			return true // a method not in the table (`w.be64`, `w[0]`) — the call check reports SB002 (do not report again)
 		}
 		c.add(Rejected, SB005RefCheckShape, x, "window `%s` may be read only as `if %s` and as `%s.u8(i)` / `be16` / `be32` / `le16` / `le32` inside it", name, name, name)
 		return true
@@ -1924,6 +2053,8 @@ func (c *progCtx) windowCheck(w, ifn *Node, outerRef string) (Stmt, bool) {
 	return s, true
 }
 
+// windowRead translates `w.u8(i)` / `be16` / `be32` / `le16` / `le32` (i is a literal with 0 ≤ i and i + width ≤ N — SB022). The
+// value is an unsigned Integer.
 func (c *progCtx) windowRead(n, recv *Node, as []*Node) *Expr {
 	name := n.Str["name"]
 	if recv == nil || recv.Type != "LocalVariableReadNode" || c.wins[recv.Str["name"]] == nil {
@@ -1937,7 +2068,7 @@ func (c *progCtx) windowRead(n, recv *Node, as []*Node) *Expr {
 	wn := recv.Str["name"]
 	info := c.wins[wn]
 	if !info.active {
-		return nil
+		return nil // a read outside the arm — the walk in windowCheck stops it with its position
 	}
 	callee, ok := c.callee(n)
 	if !ok {
@@ -1964,6 +2095,7 @@ func (c *progCtx) windowRead(n, recv *Node, as []*Node) *Expr {
 	return &Expr{Kind: "wload", Op: name, Ref: wn, Idx: iv0.Int64(), Len: info.len, Iv: iv(new(big.Int), max), Pos: c.z.pos(c.a, n)}
 }
 
+// readsBad reports whether n reads a refused binding or a poisoned local.
 func (c *progCtx) readsBad(n *Node) bool {
 	if n == nil {
 		return false
@@ -1978,6 +2110,7 @@ func (c *progCtx) readsBad(n *Node) bool {
 	return found
 }
 
+// inSkippedIf reports whether x is inside (the condition or an arm of) the if right after a refused binding.
 func (c *progCtx) inSkippedIf(x *Node) bool {
 	for p, ok := c.a.Parent[x.ID]; ok; p, ok = c.a.Parent[p] {
 		if c.skipIfs[p] {
@@ -1987,6 +2120,8 @@ func (c *progCtx) inSkippedIf(x *Node) bool {
 	return false
 }
 
+// inRebindIf reports whether x is inside the if right after another binding of the same name (a rebinding `p = M.lookup(k)`,
+// which is refused). It looks at the syntax, because the walk runs before the rebinding is processed.
 func (c *progCtx) inRebindIf(x *Node, name string, w *Node) bool {
 	for p, ok := c.a.Parent[x.ID]; ok; p, ok = c.a.Parent[p] {
 		ifn := c.a.node(p)
@@ -2007,6 +2142,7 @@ func (c *progCtx) inRebindIf(x *Node, name string, w *Node) bool {
 	return false
 }
 
+// ctxReads describes the context reads of each tracing kind (used in error messages).
 var ctxReads = map[string]string{
 	"fentry":        "`ctx.arg(i)` (an integer argument declared in `BPF.fentry … args:`) and `q = ctx.kptr_or_null(i, T)` (a struct argument)",
 	"fexit":         "`ctx.ret` (the declared return type)",
@@ -2023,8 +2159,10 @@ var ctxReads = map[string]string{
 	"fmod_ret":      "`ctx.arg(i)` (an integer argument declared in `BPF.fmod_ret … args:`)",
 }
 
+// verdictWant returns the "expected form" in a verdict error message — for xdp the caller's text as is (the messages from before
+// the early-return guards are kept unchanged), for sched_cls the TC constants.
 func verdictWant(kind, xdp string) string {
-	if kind == "fmod_ret" {
+	if kind == "fmod_ret" { // only a named return value (an integer from an implicit last expression is not accepted)
 		switch xdp {
 		case "`return BPF::XDP_X if cond`", "`return BPF::XDP_DROP if cond`":
 			return "`return BPF.fmod_return(-1) if cond`"
@@ -2033,7 +2171,7 @@ func verdictWant(kind, xdp string) string {
 		}
 		return "a named return value — BPF::FMOD_CALL (call the original function) or BPF.fmod_return(e) (e provably non-zero) — not an implicit last expression"
 	}
-	if kind == "socket_filter" {
+	if kind == "socket_filter" { // socket_filter verdicts
 		switch xdp {
 		case "`return BPF::XDP_X if cond`", "`return BPF::XDP_DROP if cond`":
 			return "`return BPF::SF_DROP if cond`"
@@ -2042,7 +2180,7 @@ func verdictWant(kind, xdp string) string {
 		}
 		return "a socket_filter verdict (BPF::SF_KEEP / SF_DROP)"
 	}
-	if kind == "cgroup_skb" {
+	if kind == "cgroup_skb" { // cgroup_skb verdicts
 		switch xdp {
 		case "`return BPF::XDP_X if cond`", "`return BPF::XDP_DROP if cond`":
 			return "`return BPF::CG_DENY if cond`"
@@ -2051,7 +2189,7 @@ func verdictWant(kind, xdp string) string {
 		}
 		return "a cgroup_skb verdict (BPF::CG_ALLOW / CG_DENY)"
 	}
-	if kind == "netfilter" {
+	if kind == "netfilter" { // netfilter verdicts
 		switch xdp {
 		case "`return BPF::XDP_X if cond`", "`return BPF::XDP_DROP if cond`":
 			return "`return BPF::NF_DROP if cond`"
@@ -2060,7 +2198,7 @@ func verdictWant(kind, xdp string) string {
 		}
 		return "a netfilter verdict (BPF::NF_ACCEPT / NF_DROP)"
 	}
-	if kind == "flow_dissector" {
+	if kind == "flow_dissector" { // flow_dissector verdicts
 		switch xdp {
 		case "`return BPF::XDP_X if cond`", "`return BPF::XDP_DROP if cond`":
 			return "`return BPF::FLOW_DROP if cond`"
@@ -2069,7 +2207,7 @@ func verdictWant(kind, xdp string) string {
 		}
 		return "a flow_dissector verdict (BPF::FLOW_OK / FLOW_DROP / FLOW_CONTINUE)"
 	}
-	if kind == "sk_lookup" {
+	if kind == "sk_lookup" { // sk_lookup verdicts
 		switch xdp {
 		case "`return BPF::XDP_X if cond`", "`return BPF::XDP_DROP if cond`":
 			return "`return BPF::SK_DROP if cond`"
@@ -2090,6 +2228,7 @@ func verdictWant(kind, xdp string) string {
 	return "a sched_cls verdict (BPF::TC_PASS / TC_DROP)"
 }
 
+// ctxUse returns the text describing the allowed uses of the context variable.
 func ctxUse(kind, param string) string {
 	if hasPacket(kind) {
 		return fmt.Sprintf("`w = %s.check(off, len)` right before `if w`", param)
@@ -2097,6 +2236,8 @@ func ctxUse(kind, param string) string {
 	return ctxReads[kind]
 }
 
+// tracingRead translates a read of a tracing context: fexit's `ctx.ret`, kprobe's `ctx.arg(n)` (n is the number of a declared
+// param, starting at 1). Anything else is SB028.
 func (c *progCtx) tracingRead(n *Node, name string, as []*Node, p Pos) *Expr {
 	kind := c.prog.Kind
 	callee, ok := c.callee(n)
@@ -2117,7 +2258,7 @@ func (c *progCtx) tracingRead(n *Node, name string, as []*Node, p Pos) *Expr {
 		return e
 	}
 	switch {
-	case (kind == "socket_filter" && name == "len") || ctxFields[kind][name]:
+	case (kind == "socket_filter" && name == "len") || ctxFields[kind][name]: // an integer field of the context (ebpf.ctx.field — a row of the capability table)
 		if want := ctxClass[kind] + "#" + name; callee != want || len(as) != 0 {
 			c.add(Rejected, SB011ShadowedName, n, "`%s.%s` resolves to %q (with %d arguments), not BPF::%s", c.param, name, callee, len(as), want)
 			return nil
@@ -2129,31 +2270,31 @@ func (c *progCtx) tracingRead(n *Node, name string, as []*Node, p Pos) *Expr {
 			return nil
 		}
 		return mk("retval", typ(c.prog.Ret), int64(c.prog.Nargs))
-	case kind == "kretprobe" && name == "ret":
+	case kind == "kretprobe" && name == "ret": // the kretprobe return value
 		if callee != "KretprobeCtx#ret" || len(as) != 0 {
 			c.add(Rejected, SB011ShadowedName, n, "`%s.ret` resolves to %q (with %d arguments), not BPF::KretprobeCtx#ret", c.param, callee, len(as))
 			return nil
 		}
 		return mk("kretval", typ(c.prog.Ret), 0)
-	case kind == "uretprobe" && name == "ret":
+	case kind == "uretprobe" && name == "ret": // lowered like kretprobe — only the ctx kind differs
 		if callee != "UretprobeCtx#ret" || len(as) != 0 {
 			c.add(Rejected, SB011ShadowedName, n, "`%s.ret` resolves to %q (with %d arguments), not BPF::UretprobeCtx#ret", c.param, callee, len(as))
 			return nil
 		}
 		return mk("kretval", typ(c.prog.Ret), 0)
-	case (kind == "ksyscall" && name == "argv_arg") || (kind == "tracepoint" && name == "argv_field"):
+	case (kind == "ksyscall" && name == "argv_arg") || (kind == "tracepoint" && name == "argv_field"): // not a value (only the third argument of output_argv)
 		c.add(Rejected, SB028TracingKind, n, "`%s.%s(…)` is accepted only as the third argument of `R.output_argv(S.new(…), :arg, %s.%s(…), :status, :index)` — an argv array is not a value on the eBPF side", c.param, name, c.param, name)
 		return nil
-	case kind == "ksyscall" && name == "str_arg":
+	case kind == "ksyscall" && name == "str_arg": // not a value (only the third argument of output_str — like uprobe's str_arg)
 		c.add(Rejected, SB028TracingKind, n, "`%s.str_arg(n)` is accepted only as the third argument of `R.output_str(S.new(…), :field, %s.str_arg(n), :status)` — a user string is not a value on the eBPF side", c.param, c.param)
 		return nil
-	case kind == "tracepoint" && name == "copy":
+	case kind == "tracepoint" && name == "copy": // not a value (only an array member's argument of S.new in R.output, or `r.load.m = ctx.copy(:f)` — like t.copy)
 		c.add(Rejected, SB028TracingKind, n, "`%s.copy(:f)` (a byte array field) is not a value — it is accepted only as an array member's argument of `R.output(S.new(…))` or as `r.load.<member> = %s.copy(:f)` inside `if r` of a record map's lookup", c.param, c.param)
 		return nil
-	case kind == "tracepoint" && name == "str_field":
+	case kind == "tracepoint" && name == "str_field": // not a value (only the third argument of output_str — like uprobe's str_arg)
 		c.add(Rejected, SB028TracingKind, n, "`%s.str_field(:f)` is accepted only as the third argument of `R.output_str(S.new(…), :field, %s.str_field(:f), :status)` — a user string is not a value on the eBPF side", c.param, c.param)
 		return nil
-	case kind == "tracepoint" && name == "field":
+	case kind == "tracepoint" && name == "field": // a declared field (offset and type come from the declaration — checked against tracefs before load)
 		if callee != "TracepointCtx#field" {
 			c.add(Rejected, SB011ShadowedName, n, "`%s.field` resolves to %q, not BPF::TracepointCtx#field", c.param, callee)
 			return nil
@@ -2165,26 +2306,26 @@ func (c *progCtx) tracingRead(n *Node, name string, as []*Node, p Pos) *Expr {
 		fn := as[0].Str["value"]
 		for _, f := range c.prog.TFields {
 			if f.Name == fn {
-				if f.Type == "user_str" {
+				if f.Type == "user_str" { // a char * field is not turned into an integer
 					c.add(Rejected, SB028TracingKind, n, "`%s.field(:%s)`: %s is declared :user_str — read the string with `%s.str_field(:%s)` as the third argument of `R.output_str`", c.param, fn, fn, c.param, fn)
 					return nil
 				}
-				if f.N > 0 {
+				if f.N > 0 { // a fixed-size byte array field is not turned into an integer (as in bpf-mlir, reading it as a u32 is the declaration's choice — this declaration is an array)
 					c.add(Rejected, SB028TracingKind, n, "`%s.field(:%s)`: %s is declared as a byte array [:%s, %d] — copy it with `%s.copy(:%s)` into a `[:u8, %d]` member of the event", c.param, fn, fn, f.Type, f.N, c.param, fn, f.N)
 					return nil
 				}
-				if f.Type == "user_str_array" {
+				if f.Type == "user_str_array" { // a char ** field is not turned into an integer
 					c.add(Rejected, SB028TracingKind, n, "`%s.field(:%s)`: %s is declared :user_str_array — read its strings with `%s.argv_field(:%s)` as the third argument of `R.output_argv`", c.param, fn, fn, c.param, fn)
 					return nil
 				}
 				rf := typ(f.Type)
-				rf.Name = f.Name
+				rf.Name = f.Name // lowering copies the name and the offset (Idx) into the op
 				return mk("tpfield", rf, f.Offset)
 			}
 		}
 		c.add(Rejected, SB028TracingKind, as[0], "`%s.field(:%s)`: %s is not declared in `BPF.tracepoint … fields:` (declare its offset and type from the tracefs format)", c.param, fn, fn)
 		return nil
-	case kind == "raw_tp" && name == "arg":
+	case kind == "raw_tp" && name == "arg": // args[i] — 0-origin, the type is always u64 (the kernel does not check it)
 		if callee != "RawTpCtx#arg" {
 			c.add(Rejected, SB011ShadowedName, n, "`%s.arg` resolves to %q, not BPF::RawTpCtx#arg", c.param, callee)
 			return nil
@@ -2202,10 +2343,10 @@ func (c *progCtx) tracingRead(n *Node, name string, as []*Node, p Pos) *Expr {
 			return nil
 		}
 		return mk("rawarg", typ("u64"), nb.Int64())
-	case kind == "kprobe" && name == "read":
+	case kind == "kprobe" && name == "read": // two results, a value and a status — only as a multiple-assignment statement (kreadStmt)
 		c.add(Rejected, SB028TracingKind, n, "`%s.read(n, offset, :type)` returns a value and a status — use it only as the statement `v, st = %s.read(…)` (the status is read later — a failed read is 0, like a real 0)", c.param, c.param)
 		return nil
-	case (kind == "kprobe" || kind == "ksyscall") && name == "arg":
+	case (kind == "kprobe" || kind == "ksyscall") && name == "arg": // for ksyscall, arg is the syscall's argument (same spelling, starting at 1)
 		want := map[string]string{"kprobe": "KprobeCtx#arg", "ksyscall": "KsyscallCtx#arg"}[kind]
 		if callee != want {
 			c.add(Rejected, SB011ShadowedName, n, "`%s.arg` resolves to %q, not BPF::%s", c.param, callee, want)
@@ -2221,14 +2362,14 @@ func (c *progCtx) tracingRead(n *Node, name string, as []*Node, p Pos) *Expr {
 		}
 		for _, kp := range c.prog.Params {
 			if nb.IsInt64() && int64(kp.N) == nb.Int64() {
-				if kp.Type == "ptr" {
+				if kp.Type == "ptr" { // the pointer's raw 64 bits as an i64 (bpf-mlir reads a ptr parameter as an 8-byte value and never dereferences it — for ids, keys and equality only; read what it points to with ctx.read — this lifted the earlier SB028 refusal)
 					return mk("kparg", &RecordField{Name: "ptr", Bits: 64, Signed: true}, nb.Int64())
 				}
-				if kp.Type == "user_str" {
+				if kp.Type == "user_str" { // a ksyscall const char * argument is not turned into an integer
 					c.add(Rejected, SB028TracingKind, n, "`%s.arg(%s)`: parameter %s is declared :user_str — read the string with `%s.str_arg(%s)` as the third argument of `R.output_str`", c.param, nb, nb, c.param, nb)
 					return nil
 				}
-				if kp.Type == "user_str_array" {
+				if kp.Type == "user_str_array" { // an argv argument is not turned into an integer
 					c.add(Rejected, SB028TracingKind, n, "`%s.arg(%s)`: parameter %s is declared :user_str_array — read its strings with `%s.argv_arg(%s)` as the third argument of `R.output_argv`", c.param, nb, nb, c.param, nb)
 					return nil
 				}
@@ -2237,7 +2378,7 @@ func (c *progCtx) tracingRead(n *Node, name string, as []*Node, p Pos) *Expr {
 		}
 		c.add(Rejected, SB028TracingKind, as[0], "`%s.arg(%s)`: %s is not a parameter number declared in `BPF.%s … params:` (numbers are 1..6, 1-origin like the schema's n)", c.param, nb, nb, kind)
 		return nil
-	case kind == "uprobe" && name == "arg":
+	case kind == "uprobe" && name == "arg": // an integer argument (the same form as kprobe — a :user_str argument is read with str_arg)
 		if callee != "UprobeCtx#arg" {
 			c.add(Rejected, SB011ShadowedName, n, "`%s.arg` resolves to %q, not BPF::UprobeCtx#arg", c.param, callee)
 			return nil
@@ -2250,15 +2391,15 @@ func (c *progCtx) tracingRead(n *Node, name string, as []*Node, p Pos) *Expr {
 			c.add(Rejected, SB028TracingKind, n, "`%s.arg(%d)`: parameter %d is declared :user_str — read it with `%s.str_arg(%d)` as the third argument of `R.output_str`", c.param, kp.N, kp.N, c.param, kp.N)
 			return nil
 		}
-		if kp.Type == "user_buf" {
+		if kp.Type == "user_buf" { // a buffer's address is not turned into an integer (in bpf-mlir a user buffer is its own type and cannot escape into an integer)
 			c.add(Rejected, SB028TracingKind, n, "`%s.arg(%d)`: parameter %d is declared :user_buf — read it with `%s.buf_arg(%d)` as the third argument of `R.output_buf`", c.param, kp.N, kp.N, c.param, kp.N)
 			return nil
 		}
-		if kp.Type == "ptr" {
+		if kp.Type == "ptr" { // the pointer's raw 64 bits as an i64 (bpf-mlir gives a raw ptr only as an i64, never dereferenced — for ids, keys and equality only — the same as kprobe's ptr)
 			return mk("kparg", &RecordField{Name: "ptr", Bits: 64, Signed: true}, int64(kp.N))
 		}
 		return mk("kparg", typ(kp.Type), int64(kp.N))
-	case (kind == "tp_btf" || kind == "fentry" || kind == "fmod_ret") && name == "arg":
+	case (kind == "tp_btf" || kind == "fentry" || kind == "fmod_ret") && name == "arg": // an integer argument (also for fentry and fmod_ret)
 		want := map[string]string{"tp_btf": "TpBtfCtx#arg", "fentry": "FentryCtx#arg", "fmod_ret": "FmodRetCtx#arg"}[kind]
 		if callee != want {
 			c.add(Rejected, SB011ShadowedName, n, "`%s.arg` resolves to %q, not BPF::%s", c.param, callee, want)
@@ -2268,7 +2409,10 @@ func (c *progCtx) tracingRead(n *Node, name string, as []*Node, p Pos) *Expr {
 			c.add(Rejected, SB033KernelTypeShape, n, "`%s.arg(i)` takes one Integer literal i — an argument index declared in `BPF.%s … args:`", c.param, kind)
 			return nil
 		}
-		nb, _ := c.z.literal(c.a, as[0])
+		nb, ok := c.z.literal(c.a, as[0])
+		if !ok { // literal has added SB001 or SB014
+			return nil
+		}
 		ta := c.prog.tpArg(int(nb.Int64()))
 		if ta == nil {
 			c.add(Rejected, SB033KernelTypeShape, as[0], "argument %s is not declared in `BPF.%s … args:`", nb, kind)
@@ -2285,7 +2429,7 @@ func (c *progCtx) tracingRead(n *Node, name string, as []*Node, p Pos) *Expr {
 	case kind == "uprobe" && name == "str_arg":
 		c.add(Rejected, SB028TracingKind, n, "`%s.str_arg(n)` is accepted only as the third argument of `R.output_str(S.new(…), :field, %s.str_arg(n), :status)` — a user string is not a value on the eBPF side", c.param, c.param)
 		return nil
-	case kind == "uprobe" && name == "buf_arg":
+	case kind == "uprobe" && name == "buf_arg": // not a value (only the third argument of output_buf)
 		c.add(Rejected, SB028TracingKind, n, "`%s.buf_arg(n)` is accepted only as the third argument of %s — a user buffer is not a value on the eBPF side", c.param, outputBufForm(c.param))
 		return nil
 	}
@@ -2293,6 +2437,7 @@ func (c *progCtx) tracingRead(n *Node, name string, as []*Node, p Pos) *Expr {
 	return nil
 }
 
+// verdictKindText returns the text naming the kind of a verdict constant (for the message about a mixed-up kind, e.g. socket_filter).
 func verdictKindText(vk string) string {
 	switch vk {
 	case "xdp":
@@ -2311,6 +2456,7 @@ func verdictKindText(vk string) string {
 	return "a socket_filter"
 }
 
+// verdictReturns returns the text saying what a program of the kind returns.
 func verdictReturns(kind string) string {
 	switch kind {
 	case "xdp":
@@ -2331,8 +2477,12 @@ func verdictReturns(kind string) string {
 	return "a " + kind + " program returns nothing (its last value is dropped)"
 }
 
+// ctxFields lists the readable integer fields of the context of each packet kind (rows of bpf-mlir v1.14.0's capability table:
+// for xdp, xdp_md's ingress_ifindex; for sched_cls, __sk_buff's len / mark; for cgroup_skb, len — all u32).
 var ctxFields = map[string]map[string]bool{"xdp": {"ingress_ifindex": true}, "sched_cls": {"len": true, "mark": true}, "cgroup_skb": {"len": true}, "sk_lookup": {"local_port": true}}
 
+// ctxStore translates `skb.mark = v` (a write of sched_cls's __sk_buff mark — the `w` row of the capability table). v's interval
+// must fit in u32 (otherwise SB014 — it is not truncated silently).
 func (c *progCtx) ctxStore(n *Node, refVar string) (Stmt, bool) {
 	callee, ok := c.callee(n)
 	if !ok {
@@ -2358,10 +2508,17 @@ func (c *progCtx) ctxStore(n *Node, refVar string) (Stmt, bool) {
 	return Stmt{Kind: "ctxstore", Path: "mark", Val: e, Pos: c.z.pos(c.a, n)}, true
 }
 
+// isAdjustPkt reports whether n is the CallNode of `ctx.adjust_head(…)` / `ctx.adjust_tail(…)` in an xdp program (the check shared
+// by the helpers that move the packet).
 func (c *progCtx) isAdjustPkt(n *Node) bool {
 	return n != nil && n.Type == "CallNode" && (n.Str["name"] == "adjust_head" || n.Str["name"] == "adjust_tail") && c.prog != nil && c.prog.Kind == "xdp" && c.isVarRead(c.a.ref(n, "receiver"), c.param)
 }
 
+// adjustPkt translates the value of `st = ctx.adjust_head(d)` / `st = ctx.adjust_tail(k)` (ebpf.xdp.adjust_head / adjust_tail;
+// the status is 0 or −errno). Only an assignment to a local directly in the program's body is accepted (a window lives only
+// inside `if w`, so directly in the body no window that the helper invalidates is crossed — this anticipates bpf-mlir's
+// may-invalidate check). adjust_head's delta must have an i32 interval; adjust_tail's delta must be an Integer literal ≤ 0
+// (bpf-mlir's op verifier accepts only a direct constant i32 delta ≤ 0 for adjust_tail).
 func (c *progCtx) adjustPkt(n *Node, refVar string) *Expr {
 	nm := n.Str["name"]
 	p := c.a.node(c.a.Parent[n.ID])
@@ -2386,7 +2543,7 @@ func (c *progCtx) adjustPkt(n *Node, refVar string) *Expr {
 		c.add(Rejected, SB002UnsupportedCall, n, "`%s.%s(d)` takes one delta", c.param, nm)
 		return nil
 	}
-	if nm == "adjust_tail" {
+	if nm == "adjust_tail" { // only an Integer literal ≤ 0 (bpf-mlir's op verifier — it has no growing side and no non-constant delta)
 		var k int64
 		ok := as[0].Type == "IntegerNode"
 		if ok {

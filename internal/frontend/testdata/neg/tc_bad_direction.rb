@@ -1,6 +1,6 @@
 require "bpf"
 
-
+# An unknown direction
 def p(skb)
   BPF::TC_PASS
 end

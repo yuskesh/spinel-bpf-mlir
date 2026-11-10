@@ -2,7 +2,7 @@ require "bpf"
 
 Out = BPF::ArrayMap.new("Out", :u32, 2)
 
-
+# The origin crosses a loop's iter_args
 def prog(ctx)
   s = 0
   p = Out.lookup(0)

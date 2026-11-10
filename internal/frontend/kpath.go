@@ -1,5 +1,9 @@
 package frontend
 
+// Harness triggers for the embedded kernel-struct path (a kernel_type member that is itself a struct, read in place).
+
+// hasKpath reports whether some kernel_type declares an embedded struct member ([:struct, S]); it is the trigger for the
+// harness's tcpsend helper.
 func hasKpath(res *Result) bool {
 	for _, d := range res.KernelTypes {
 		for _, f := range d.Fields {
@@ -11,6 +15,10 @@ func hasKpath(res *Result) bool {
 	return false
 }
 
+// hTcpSendC is the harness's `tcpsend <n>`: it listens on 127.0.0.2 port 0, a client bound to 127.0.0.1 connects and sends one byte
+// (tcp_sendmsg runs on the client's socket — the destination is 127.0.0.2 and the listening port, the source port is the client's port),
+// then it accepts and closes everything.
+// h_tcpsend returns the listening port and h_tcpsend_cport the port of the last client (errors are negative).
 const hTcpSendC = `    #include <arpa/inet.h>
     #include <netinet/in.h>
     #include <string.h>
@@ -44,6 +52,9 @@ const hTcpSendC = `    #include <arpa/inet.h>
     long h_tcpsend_cport(void) { return h_ts_cport; }
 `
 
+// kaddrRead lowers `t.addr` (bpf-mlir's ebpf.kptr.addr): all 64 bits of the address of a checked (present) kernel pointer, as an i64.
+// Use of a nullable `q` outside the then branch of its check is stopped earlier by kcheckedRoot (program.go — SB005).
+// The value spans the whole signed i64 range (kernel addresses are negative).
 func (c *progCtx) kaddrRead(n, recv *Node, p Pos) *Expr {
 	t := recv.Str["name"]
 	if cs, ok := c.callee(n); !ok || cs != "KPtr#addr" {
@@ -61,6 +72,8 @@ func (c *progCtx) kaddrRead(n, recv *Node, p Pos) *Expr {
 	return e
 }
 
+// hasKaddr reports whether some program reads the address of a blk_mq request — recognised by the kernel_type name "request".
+// It is the trigger for the harness's odirect helper.
 func hasKaddr(res *Result) bool {
 	for _, d := range res.KernelTypes {
 		if d.Name == "request" {
@@ -70,6 +83,10 @@ func hasKaddr(res *Result) bool {
 	return false
 }
 
+// hODirectC is the harness's `odirect <dir> <n>`: it writes 64 KiB to its own file in dir (which must be on a block device — tmpfs
+// gives -9), calls fdatasync, then reads the first 4 KiB n times with O_DIRECT (it does not change the host's queue, scheduler or
+// mounts). h_od_sector returns the expected sector, computed from the physical byte of the first extent reported by FIEMAP and the
+// start of the partition holding the file's device (/sys/dev/block/MAJ:MIN/start — in 512-byte sectors); errors are negative.
 const hODirectC = `    #include <fcntl.h>
     #ifndef O_DIRECT
     #define O_DIRECT 040000

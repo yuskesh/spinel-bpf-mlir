@@ -5,6 +5,9 @@ import (
 	"testing"
 )
 
+// Reading ebpf-compile's rc 0 output (the form of bpf-mlir's non-root index warnings: `warning:` lines with following
+// `note:` lines) and failing closed. wIdx is the text of bpf-mlir ab0db4b40 (the internal reference numbers were dropped
+// from bpf-mlir's messages before its source distribution).
 const (
 	wIdx  = `the index of ebpf.ref.index can be a constant on one path and a non-constant value on another — loaders without CAP_PERFMON were observed to reject this pointer arithmetic on some kernels; keep the default out of the index (put the ref.index inside the present region) or make the default non-constant`
 	wLoop = `the index of ebpf.ref.index is a value carried by an ebpf.loop without unroll`
@@ -13,7 +16,7 @@ const (
 func TestParseCompileOutput(t *testing.T) {
 	for _, c := range []struct {
 		name, stderr string
-		want         []string
+		want         []string // "file:line:col|notes"
 	}{
 		{"empty", "", nil},
 		{"const", `loc("idx.rb":19:11): warning: ` + wIdx + "\n" + `loc("idx.rb":12:10): note: the constant index comes from here` + "\n",

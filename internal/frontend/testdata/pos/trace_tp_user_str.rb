@@ -1,8 +1,8 @@
 require "bpf"
 
-
-
-
+# A tracepoint user string field: filename (const char *, offset 24, 8 bytes) of syscalls/sys_enter_openat
+# read by ctx.str_field(:filename) into the ring event's name ([:u8, 32]) (tp.field -> !ebpf.user_str and user.read_str).
+# For the Filter tgid into Events {nr: __syscall_nr, name, status: read_str's raw status}; on success add 1 to Out[0]
 Ev = Struct.new(:nr, :pad, :name, :status)
 BPF.record(Ev, nr: :i32, pad: :u32, name: [:u8, 32], status: :i64)
 

@@ -1,6 +1,6 @@
 require "bpf"
 
-
+# Element read-modify-write — a read of the same entry stored to the same element
 Hist = Struct.new(:hist, :n)
 BPF.record(Hist, hist: [:u32, 8], n: :u64)
 Hs = BPF::RecordMap.new("Hs", Hist.new(Array.new(8, 0), 0), 2)

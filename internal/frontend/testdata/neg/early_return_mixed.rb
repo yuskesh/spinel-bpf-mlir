@@ -1,6 +1,6 @@
 require "bpf"
 
-
+# Two early-return verdicts (DROP and TX) — verdict.if takes only two verdicts (three with the final PASS)
 In = BPF::ArrayMap.new("In", :i32, 1)
 Out = BPF::ArrayMap.new("Out", :u64, 2)
 

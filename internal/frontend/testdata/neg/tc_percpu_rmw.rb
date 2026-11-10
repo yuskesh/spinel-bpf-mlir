@@ -1,6 +1,6 @@
 require "bpf"
 
-
+# A per-CPU lookup value write-back shared with sched_cls — the exemption is xdp only (SB019 once sched_cls is mixed in)
 Hits = BPF::PerCpuArrayMap.new("Hits", :i64, 4)
 
 def on_xdp(ctx)

@@ -1,6 +1,6 @@
 require "bpf"
 
-
+# BPF.ktime_ns (u64): copied into a record's u64 member and into a u64 map, and & M
 
 L = Struct.new(:n, :ns)
 BPF.record(L, n: :u64, ns: :u64)

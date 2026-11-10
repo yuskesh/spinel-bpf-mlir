@@ -1,6 +1,6 @@
 require "bpf"
 
-
+# adjust_head on the tc context (xdp only)
 Out = BPF::ArrayMap.new("Out", :i64, 1)
 
 def p(skb)

@@ -12,9 +12,9 @@ def count_pkts(ctx)
 end
 BPF.xdp :count_pkts
 
-
-
-
+# The user-space side — plain Ruby (compiled by Spinel).
+#   xdpcount --iface IF [--duration-ms MS]   attach, wait MS milliseconds, print the counts
+#   xdpcount --selftest N                   without attaching, run BPF_PROG_TEST_RUN N times (passed on 7.1.8, and on 6.12 and 6.6 in VMs)
 require "spinelbpf"
 
 USAGE = "usage: xdpcount --iface IF [--duration-ms MS] | --selftest N"
@@ -41,7 +41,7 @@ if iface == "" && selftest <= 0
   raise USAGE
 end
 
-obj = SpinelBPF.load_embedded
+obj = SpinelBPF.load_embedded # load after checking the requirements against the kernel (there is no unchecked entry point)
 unmet = obj.unmet
 puts "unmet (not blocking — undetermined requirements, loaded anyway): #{unmet.length} (requirements policy #{SpinelBPF.policy_version})"
 unmet.each { |u| puts "  unmet: #{u}" }

@@ -1,6 +1,6 @@
 require "bpf"
 
-
+# check on the socket_filter context (it has no packet — only len)
 Out = BPF::ArrayMap.new("Out", :u32, 1)
 
 def p(skb)

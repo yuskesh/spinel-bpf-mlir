@@ -1,6 +1,6 @@
 require "bpf"
 
-
+# socket_filter returns an XDP verdict
 def p(skb)
   BPF::XDP_PASS
 end

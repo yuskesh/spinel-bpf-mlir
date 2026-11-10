@@ -1,6 +1,6 @@
 require "bpf"
 
-
+# Uses a window taken before adjust_head afterwards (a window lives only inside if w — a stale window use)
 Out = BPF::ArrayMap.new("Out", :i64, 2)
 
 def p(ctx)
@@ -15,5 +15,5 @@ def p(ctx)
   BPF::XDP_PASS
 end
 BPF.xdp :p
-
+# Predicted 8:3 (the binding position); it actually stops at the stale window use
 # want: SB005 14:21

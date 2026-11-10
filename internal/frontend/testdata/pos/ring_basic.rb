@@ -1,6 +1,6 @@
 require "bpf"
 
-
+# Two ring buffers, two record types and an array map in one program; the three forms of output: if / unless / `_ =`
 Event = Struct.new(:src, :dst, :proto, :_pad0, :len, :_pad1)
 BPF.record(Event, src: :u32, dst: :u32, proto: :u8, _pad0: :u8, len: :u16, _pad1: :u32)
 Tick = Struct.new(:n, :ns)

@@ -1,6 +1,6 @@
 # Tutorial
 
-This page builds spinel-bpf-mlir v0.9.1, checks the versions, and runs four example
+This page builds spinel-bpf-mlir v0.10.0, checks the versions, and runs four example
 programs (XDP, tcx, uprobe and tp_btf) in the kernel with `--selftest`.
 
 Read the limits in [release.md](release.md) first. Kernel execution has been verified on
@@ -8,24 +8,24 @@ Linux 7.1.8 (x86_64) only.
 
 ## Step 0: build and check the versions
 
-Requirements: Linux x86_64, LLVM / MLIR 23.1.1 (`/opt/llvm-23.1.1`), Go 1.27, gcc,
+Requirements: Linux x86_64, LLVM / MLIR 23.1.1 (`/opt/llvm-23.1.1`), gcc (no Go),
 make, CMake, Ninja, git, network access, and root (`sudo`) for steps 1 to 4.
 
 ```sh
-git clone --recurse-submodules --branch v0.9.1 https://github.com/yuskesh/spinel-bpf-mlir
+git clone --recurse-submodules --branch v0.10.0 https://github.com/yuskesh/spinel-bpf-mlir
 cd spinel-bpf-mlir
 scripts/setup.sh
-go build -o build/bin/spinelbpf ./cmd/spinelbpf
+scripts/build-c-driver.sh build/bin
 build/bin/spinelbpf --version
 ```
 
-The first line of `--version` is `spinel-bpf-mlir v0.9.1 (commit <12 hex digits>)`.
+The first line of `--version` is `spinel-bpf-mlir v0.10.0 (commit <12 hex digits>)`.
 A `+dirty` suffix means the working tree has changes. The following lines name the
 pinned dependencies:
 
 ```
-bpf-mlir v1.21.0 (commit 41b18856; Go packages github.com/yuskesh/go-bpf-mlir v0.19.0, go.mod require)
-bml v0.1.0 (commit 41ec56f)
+bpf-mlir v1.22.0 (commit 2bf11230; Go packages github.com/yuskesh/go-bpf-mlir v0.20.0, go.mod require)
+bml v0.1.1 (commit ad2eafd)
 spinel 086d514d
 ebpf-compile: <the --version line of the ebpf-compile that setup built>
 ```

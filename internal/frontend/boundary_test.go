@@ -6,12 +6,16 @@ import (
 	"testing"
 )
 
+// TestBoundaries checks the interval boundaries: a form whose interval fits exactly is accepted, and one that exceeds it by 1 is
+// stopped (for operators the bound is i64, for a store the value type, for a key max_entries).
+// Each row generates a program text and analyzes it (only the code is checked; positions are checked by the negative tests
+// in testdata/neg).
 func TestBoundaries(t *testing.T) {
 	head := "require \"bpf\"\n\nOut = BPF::ArrayMap.new(\"Out\", :i64, 4)\nU = BPF::ArrayMap.new(\"U\", :u32, 4)\nI = BPF::ArrayMap.new(\"I\", :i32, 4)\nW = BPF::ArrayMap.new(\"W\", :u64, 4)\n\ndef prog(ctx)\n"
 	tail := "  BPF::XDP_PASS\nend\nBPF.xdp :prog\n"
 	cases := []struct {
 		name, body string
-		want       Code
+		want       Code // "" means accepted
 	}{
 		{"add fits", "  a = 9223372036854775806\n  Out.update(0, a + 1)\n", ""},
 		{"add overflows", "  a = 9223372036854775806\n  Out.update(0, a + 2)\n", SB014SemanticGap},

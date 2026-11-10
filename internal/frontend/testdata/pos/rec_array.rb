@@ -1,6 +1,6 @@
 require "bpf"
 
-
+# Record array members: declarations (hist: [:u32, 8], v: [:u16, 3]); reads, writes and atomic_add at constant indexes
 Hist = Struct.new(:hist, :n)
 BPF.record(Hist, hist: [:u32, 8], n: :u64)
 Pair = Struct.new(:a, :v)

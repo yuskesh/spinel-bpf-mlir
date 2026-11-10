@@ -3,7 +3,7 @@ require "bpf"
 Off = BPF::ArrayMap.new("Off", :u32, 1)
 Out = BPF::ArrayMap.new("Out", :u32, 1)
 
-
+# A map value as the offset: accepted once `& 0xFFF` narrows its range to [0, 4095]
 def masked(ctx)
   p = Off.lookup(0)
   if p

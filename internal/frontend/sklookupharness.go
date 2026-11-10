@@ -5,6 +5,13 @@ import (
 	"strings"
 )
 
+// The sk_lookup harness. In the kernel, `sput <Map> <k> udp|tcp <port>` creates a socket on 127.0.0.1:port (listening, for tcp),
+// map_puts its fd and prints `scookie=` (SO_COOKIE); the twin puts the protocol in the slot. In the kernel, `run <prog> proto=<p>
+// port=<n>` is an sk_lookup test run (`ret=` and ctx_out's `cookie=` — the cookie of the chosen socket, 0 if none); the twin uses
+// SkLookupCtx (`ret=` only — the cookie is checked in the kernel only).
+// Sockmaps stay out of reset / dump (an integer cannot be put in an empty kernel slot — fd 0 is not a socket). Test builds only.
+
+// skHarnessSetup returns the kernel harness's inline C for sockets. It is empty when there is no sk_lookup program.
 func skHarnessSetup(res *Result) string {
 	if !hasKind(res, "sk_lookup") {
 		return ""
@@ -41,6 +48,7 @@ end
 `
 }
 
+// skRun returns the `run <prog> proto=<p> port=<n>` branch for an sk_lookup program.
 func skRun(kw string, p *Program, kernel bool) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "      %s _h_f[1] == %q\n        _h_pr = _h_f[2].split(\"=\")[1].to_i\n        _h_po = _h_f[3].split(\"=\")[1].to_i\n", kw, p.Name)
@@ -52,6 +60,7 @@ func skRun(kw string, p *Program, kernel bool) string {
 	return b.String()
 }
 
+// skCmds returns the `sput` command (empty when there is no sockmap).
 func skCmds(res *Result, kernel bool) string {
 	var b strings.Builder
 	for _, m := range res.Maps {

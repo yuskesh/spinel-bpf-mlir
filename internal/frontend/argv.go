@@ -5,12 +5,23 @@ import (
 	"strings"
 )
 
+// argv: `params: {n => :user_str_array}` (ksyscall) / `fields: {f: [off, :user_str_array]}` (tracepoint) and
+// `_ = R.output_argv(S.new(…), :arg, ctx.argv_arg(n) | ctx.argv_field(:f), :status, :index)` — one statement emits one ring event per
+// argv slot 0..19 (stopping at the first slot whose present flag is false). bpf-mlir's `ebpf.user.str_at` takes the index only as a
+// constant attribute 0..19 and is rejected inside ebpf.loop, so the lowering does not use ebpf.loop: it expands to the shape of
+// argv20.mlir — a 20-level straight-line nesting that puts str_at [k+1] inside the ebpf.if on present [k] (the order of the present
+// checks is not left to the writer). 20 events cannot tell "argv has exactly 20 elements" from "21 or more (cut at the first 20)".
+
+// argvSlots is the number of str_at slots (bpf-mlir's limit — the attribute is 0..19).
 const argvSlots = 20
 
+// outputArgvShape is the sentence showing the shape of output_argv (how to fix an error message).
 func outputArgvShape(r *RingDecl, src string) string {
 	return fmt.Sprintf("`_ = %s.output_argv(%s.new(…), :<u8 array member>, %s, :<i64 status member>, :<u32 index member>)`", r.Const, r.Record.Const, src)
 }
 
+// outputArgv checks `R.output_argv(S.new(…), :arg, <argv>, :status, :index)` and builds a Stmt "ostr" (Argv). Binding the result is
+// rejected by outputStrCheck with SB025.
 func (c *progCtx) outputArgv(call *Node, name, refVar string) (Stmt, bool) {
 	r := c.ringOf(c.a.ref(call, "receiver"))
 	src := map[string]string{"ksyscall": "ctx.argv_arg(n)", "tracepoint": "ctx.argv_field(:f)"}[c.prog.Kind]
@@ -104,6 +115,11 @@ func (c *progCtx) outputArgv(call *Node, name, refVar string) (Stmt, bool) {
 	return Stmt{}, false
 }
 
+// outputArgv lowers "ostr" (Argv): it makes one argv array value and nests the str_at of slots 0..19 in ebpf.if on present (the shape
+// of argv20.mlir). Inside each level's present branch is the output_str lowering (StrSSA is the slot's string, IndexV the slot number).
+// The mutation `argv-flat` drops the nesting and puts the 20 levels directly in the program body (breaking the order of the present
+// checks; this still compiles, because bpf-mlir does not enforce the nesting — the order is kept by the frontend), and
+// `argv-index-shift` makes the index literal k+1.
 func (l *lowerer) outputArgv(s Stmt) error {
 	av := l.val()
 	if s.TpStr != nil {
@@ -148,8 +164,11 @@ func (l *lowerer) outputArgv(s Stmt) error {
 	return nil
 }
 
+// argvTwinEmpty is the empty argv of the twin (the same program run natively in Ruby): 0 elements — a NULL array.
 const argvTwinEmpty = "BPF::UserStrArray.new(Array.new(0, BPF::UserStr.new(Array.new(0, 0), true)))"
 
+// argvTwinParse returns the Ruby lines that put the twin harness's `<key>=<w1,w2,…|@null>` (@e is an empty element) into target as a
+// UserStrArray.
 func argvTwinParse(target string) string {
 	return "            _h_aw = Array.new(0, BPF::UserStr.new(Array.new(0, 0), true))\n" +
 		"            if _h_kv[1] != \"@null\"\n              _h_ws = _h_kv[1].split(\",\")\n              _h_x = 0\n              while _h_x < _h_ws.length\n" +
@@ -157,6 +176,7 @@ func argvTwinParse(target string) string {
 		"                _h_x += 1\n              end\n            end\n            " + target + " = BPF::UserStrArray.new(_h_aw)\n"
 }
 
+// hasArgv reports whether some program has a :user_str_array argument or field (for the harness's execargv).
 func hasArgv(res *Result) bool {
 	for _, p := range res.Programs {
 		for _, kp := range p.Params {
@@ -173,6 +193,10 @@ func hasArgv(res *Result) bool {
 	return false
 }
 
+// hArgvSpawnC is the harness's `execargv`: h_argv_spawn builds an argv (`,`-separated — @e is an empty element, @null is 0 elements,
+// at most 63 elements) and forks a child (the child waits for 1 byte on a pipe, then calls execve("/nonexistent-e151", argv, empty envp)
+// — it fails with ENOENT, but the syscall entry reads argv — and calls _exit(127)); h_argv_release writes that byte, waits with
+// waitpid and returns the child's exit status.
 const hArgvSpawnC = `    #include <string.h>
     static int h_av_fd = -1;
     long h_argv_spawn(const char *csv) {

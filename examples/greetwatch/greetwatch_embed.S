@@ -8,7 +8,7 @@ spinelbpf_elf_start:
 spinelbpf_elf_end:
   .globl spinelbpf_schema_sha
 spinelbpf_schema_sha:
-  .asciz "e2015baed03500cc6f955fd7c925a54067402fcaa623b63e18c7646bf0b03be3"
+  .asciz "fd815d1fa9bf5eaa8502ca3a777dc588035605a4313f53c4b81f4ce964d3f2eb"
   .globl spinelbpf_maps_json
 spinelbpf_maps_json:
   .incbin "greetwatch.maps.json"

@@ -12,14 +12,23 @@ import (
 	"github.com/yuskesh/go-bpf-mlir/requirements"
 )
 
+// The archives of the C loader (bpf-mlir-loader, "bml") and the check of its versions.
+
+// bmlArchives is the link order of the bml archives: the shim first, then libbml, then libbpf, libelf and libz
+// (static archives in dependency order — each later archive satisfies the earlier ones).
 var bmlArchives = []string{"libbml_spinel.a", "libbml.a", "libbpf.a", "libelf.a", "libz.a"}
 
+// versionSet is the set of loader and frontend versions. spinel's bpf-mlir and bml's bpf-mlir must be the same commit, and the
+// judgement (policy) version and the maximum requirements format must be equal (if they differ, the load-time check judges the
+// generated requirements by different rules — so the build stops).
 type versionSet struct {
 	BpfMlirCommit string
 	PolicyVersion int
 	MaxFormat     int
 }
 
+// spinelVersions is spinel's side: the third_party/bpf-mlir gitlink in the superproject's index (readable in a clone that has
+// not checked out the submodule; it sees the staged pointer) and the constants of the Go requirements package.
 func spinelVersions(cfg Config) (versionSet, error) {
 	o, err := exec.Command("git", "-C", cfg.Repo, "ls-files", "-s", "third_party/bpf-mlir").Output()
 	f := strings.Fields(string(o))
@@ -31,6 +40,8 @@ func spinelVersions(cfg Config) (versionSet, error) {
 
 var defineRe = func(name string) *regexp.Regexp { return regexp.MustCompile(`(?m)^#define ` + name + ` +([0-9]+)`) }
 
+// bmlVersions is bml's side: the third_party/bpf-mlir gitlink in the submodule's tree and the C constants (bml's own bpf-mlir is
+// not checked out).
 func bmlVersions(cfg Config) (versionSet, error) {
 	bml := filepath.Join(cfg.Repo, "third_party", "bpf-mlir-loader")
 	o, err := exec.Command("git", "-C", bml, "ls-tree", "HEAD", "third_party/bpf-mlir").Output()
@@ -60,6 +71,7 @@ func bmlVersions(cfg Config) (versionSet, error) {
 	return versionSet{f[2], p, mf}, nil
 }
 
+// compareVersions returns the differences between the two sets, each named (nil if none).
 func compareVersions(sp, bml versionSet) error {
 	var bad []string
 	if sp.BpfMlirCommit != bml.BpfMlirCommit {

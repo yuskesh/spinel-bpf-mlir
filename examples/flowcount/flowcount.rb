@@ -1,8 +1,8 @@
 require "bpf"
 
-
-
-
+# The eBPF side — counts IPv4 frames per flow (protocol, destination port, destination address).
+# The key is a record (record.make zeroes its padding); frame and byte counts go to two lru_hash maps via add_or_init (integer values only; no count is lost when two CPUs initialise the same entry at once).
+# A non-zero status (an lru_hash returns 0 even when full, so only an unexpected errno shows up) is counted in Errs; the status is never discarded (diagnostic SB026).
 FlowKey = Struct.new(:proto, :_pad0, :port, :addr)
 BPF.record(FlowKey, proto: :u8, _pad0: :u8, port: :u16, addr: :u32)
 
@@ -43,9 +43,9 @@ def flowcount(ctx)
 end
 BPF.xdp :flowcount
 
-
-
-
+# The user-space side — plain Ruby (compiled by Spinel).
+#   flowcount --iface IF [--duration-ms MS]   attach, wait MS milliseconds, print frame and byte counts per flow
+#   flowcount --selftest                     without attaching, run BPF_PROG_TEST_RUN on built frames (passed on 7.1.8, and on 6.12 and 6.6 in VMs)
 require "spinelbpf"
 
 USAGE = "usage: flowcount --iface IF [--duration-ms MS] | --selftest"
@@ -72,7 +72,7 @@ if iface == "" && !selftest
   raise USAGE
 end
 
-
+# frame builds a 64-byte frame with the EtherType and, for IPv4, the IHL, total length, protocol, destination address and destination port.
 def frame(et, ihl, total, proto, dst, port)
   f = Array.new(64, 0)
   f[12] = et >> 8
@@ -109,7 +109,7 @@ end
 obj = SpinelBPF.load_embedded
 puts "unmet (not blocking): #{obj.unmet.length} (requirements policy #{SpinelBPF.policy_version})"
 if selftest
-  dst = 167772162
+  dst = 167772162 # 10.0.0.2
   obj.test_run_xdp_packet("flowcount", frame(0x0800, 5, 29, 17, dst, 9999))
   obj.test_run_xdp_packet("flowcount", frame(0x0800, 5, 40, 17, dst, 9999))
   obj.test_run_xdp_packet("flowcount", frame(0x0800, 5, 52, 6, dst, 443))

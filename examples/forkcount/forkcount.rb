@@ -1,7 +1,7 @@
 require "bpf"
 
-
-
+# The eBPF side — the tp_btf (BTF-typed tracepoint) sched_process_fork: counts forks whose parent tgid is Cfg[0] and stores the last child's pid and tgid in Out.
+# Kernel struct fields (task_struct's pid and tgid) are read with CO-RE (relocated at load time); the pre-load check of the loader (bpf-mlir-loader) compares their width, sign and name with the kernel's BTF.
 Task = Struct.new(:pid, :tgid)
 BPF.kernel_type(Task, "task_struct", pid: :i32, tgid: :i32)
 TaskT = BPF::KernelType.new(Task.new(0, 0))
@@ -22,12 +22,12 @@ def on_fork(ctx)
 end
 BPF.tp_btf :on_fork, "sched_process_fork", args: {0 => TaskT, 1 => TaskT}
 
-
-
-
+# The user-space side — plain Ruby (compiled by Spinel).
+#   forkcount --selftest [N]                 fork N times itself (default 5) and check the count and the last child's pid
+#   forkcount --pid PID [--duration-ms MS]   count the forks of process PID for MS milliseconds
 require "spinelbpf"
 
-
+# FC gives our own pid and a fork (the child exits at once; the parent waits and returns the child's pid) — inline C inside the example.
 module FC
   ffi_source <<~C
     #include <unistd.h>

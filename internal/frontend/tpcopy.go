@@ -1,9 +1,19 @@
 package frontend
 
+// Fixed-size byte array fields of a tracepoint: `fields: {daddr: [36, [:u8, 4]]}` and `ctx.copy(:daddr)`.
+// It goes in the same places as t.copy(:m): as the argument for an array member in `R.output(S.new(…))` (into the reservation —
+// ebpf.tp.field.copy after store_record) and in `r.load.m = ctx.copy(:f)` (into a borrowed record map value). It is not a value
+// (it cannot be put in a local, arithmetic or a map value). The destination is a one-dimensional 8-bit array with the same N.
+// The requirements line `tpfield <p> <f> <off> <N> [N]u8` (format version 17) is checked against tracefs's `__u8 f[N]` before load.
+
+// isTpCopy reports whether x is `ctx.copy(…)` in a tracepoint program.
 func (c *progCtx) isTpCopy(x *Node) bool {
 	return x != nil && x.Type == "CallNode" && x.Str["name"] == "copy" && c.prog != nil && c.prog.Kind == "tracepoint" && c.isVarRead(c.a.ref(x, "receiver"), c.param)
 }
 
+// ctxCopyOtherKind rejects `ctx.copy(…)` as an array member's argument in a program that is not a tracepoint, with the same text as
+// other ctx reads (tracingRead's default — "the <kind> context has no `copy`"), rather than falling through to the existing array
+// member check's (Array.new) text. It returns true when it rejected.
 func (c *progCtx) ctxCopyOtherKind(x *Node) bool {
 	if x == nil || x.Type != "CallNode" || x.Str["name"] != "copy" || c.prog == nil || c.prog.Kind == "tracepoint" || c.param == "" || !c.isVarRead(c.a.ref(x, "receiver"), c.param) {
 		return false
@@ -13,6 +23,7 @@ func (c *progCtx) ctxCopyOtherKind(x *Node) bool {
 	return true
 }
 
+// tpCopyField checks `ctx.copy(:f)` and returns the field to copy (the destination is rec's member rf).
 func (c *progCtx) tpCopyField(x, at *Node, rf *RecordField, recConst string) (*TpField, bool) {
 	if cs, ok := c.callee(x); !ok || cs != "TracepointCtx#copy" {
 		if ok {
@@ -49,6 +60,7 @@ func (c *progCtx) tpCopyField(x, at *Node, rf *RecordField, recConst string) (*T
 	return tf, true
 }
 
+// tpcopyStmt handles `r.load.m = ctx.copy(:f)` (into an array member of a borrowed record).
 func (c *progCtx) tpcopyStmt(n, cp *Node, ref string, m *MapDecl, rf *RecordField) (Stmt, bool) {
 	tf, ok := c.tpCopyField(cp, n, rf, m.Record.Const)
 	if !ok {
@@ -57,8 +69,10 @@ func (c *progCtx) tpcopyStmt(n, cp *Node, ref string, m *MapDecl, rf *RecordFiel
 	return Stmt{Kind: "tpcopy", Var: ref, Map: m, Field: rf, TpCopy: tf, Pos: c.z.pos(c.a, n)}, true
 }
 
+// tpCopyOffset is the offset of tp.field.copy (the declared offset — bpf-mlir requires the op and the schema to agree).
 func tpCopyOffset(f *TpField) int64 { return f.Offset }
 
+// hasTpArray reports whether some program declares a fixed-size byte array field of a tracepoint (for the harness's tcpconnect trigger).
 func hasTpArray(res *Result) bool {
 	for _, p := range res.Programs {
 		for _, f := range p.TFields {
@@ -70,6 +84,9 @@ func hasTpArray(res *Result) bool {
 	return false
 }
 
+// hTcpConnectC is the harness's `tcpconnect <4|6> <n>`: it listens on port 0 of its own loopback (127.0.0.1 or ::1), connects and
+// accepts on the same thread (CLOSE → SYN_SENT happens inside the connect syscall — in its own tgid), closes everything and returns
+// the listening port (negative on error).
 const hTcpConnectC = `    #include <arpa/inet.h>
     #include <netinet/in.h>
     #include <string.h>

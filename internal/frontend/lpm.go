@@ -6,6 +6,10 @@ import (
 	"strings"
 )
 
+// lpm_trie maps (IPv4 longest-prefix match). The library owns the key record (`spinelbpf_lpm_key4` — the reserved prefix keeps it
+// from colliding with a user's record, and being lower-case it is not a Ruby constant). bpf-mlir's schema rule fixes the key down to
+// the names: 8 bytes, `prefixlen` u32 @0, `addr` u8[4] @4; bit 0 of flags (BPF_F_NO_PREALLOC) is required, and the value is an
+// integer. Inside a program only lookup → ref.check → ref.load is allowed (a write gives "a lpm_trie is read-only in programs").
 var lpmKey4 = &RecordDecl{
 	Const:  "spinelbpf_lpm_key4",
 	Fields: []RecordField{{Name: "prefixlen", Bits: 32, Offset: 0}, {Name: "addr", Bits: 8, Offset: 4, Count: 4}},
@@ -13,10 +17,13 @@ var lpmKey4 = &RecordDecl{
 	Align:  4,
 }
 
+// lpmAddrByte is one element of the key's addr (for the range check of lookup's arguments — u8).
 var lpmAddrByte = RecordField{Name: "addr", Bits: 8}
 
+// IsLpm reports whether m is an lpm_trie map.
 func (m *MapDecl) IsLpm() bool { return m.Kind == "lpm_trie" }
 
+// Flags returns the map's flags for the schema and maps.json (lpm_trie: 1, BPF_F_NO_PREALLOC — other kinds: 0).
 func (m *MapDecl) Flags() uint64 {
 	if m.IsLpm() {
 		return 1
@@ -24,6 +31,8 @@ func (m *MapDecl) Flags() uint64 {
 	return 0
 }
 
+// lpmKey builds the key of `R.lookup(a0, a1, a2, a3)`: a record.make of prefixlen 32 and the 4 address bytes (each in u8's range —
+// outside it is SB014).
 func (c *progCtx) lpmKey(call *Node, m *MapDecl, as []*Node, refVar string) *Expr {
 	if len(as) != 4 {
 		c.add(Rejected, SB002UnsupportedCall, call, "`%s.lookup` takes the 4 bytes of an IPv4 address (`%s.lookup(a0, a1, a2, a3)` — e.g. `w.u8(30)` … `w.u8(33)`)", m.Const, m.Const)
@@ -39,12 +48,14 @@ func (c *progCtx) lpmKey(call *Node, m *MapDecl, as []*Node, refVar string) *Exp
 		bs.Args = append(bs.Args, e)
 	}
 	plen := big.NewInt(32)
-	if mutation("lpm-plen24") {
+	if mutation("lpm-plen24") { // mutation control (test builds only): set the key's prefixlen to 24
 		plen = big.NewInt(24)
 	}
 	return &Expr{Kind: "rmake", Map: km, Args: []*Expr{{Kind: "lit", Lit: plen, Iv: point(plen), Pos: c.z.pos(c.a, call)}, bs}, Pos: c.z.pos(c.a, call)}
 }
 
+// valueTypesText is the spelling of the value types in a declaration error (lpm_trie allows 32 bits only; the others keep the
+// existing text).
 func valueTypesText(kind string) string {
 	if kind == "lpm_trie" {
 		return ":u32|:i32"
@@ -52,6 +63,7 @@ func valueTypesText(kind string) string {
 	return ":u32|:u64|:i32|:i64"
 }
 
+// valueTypesWords is valueTypesText in sentence form.
 func valueTypesWords(kind string) string {
 	if kind == "lpm_trie" {
 		return ":u32 or :i32"
@@ -59,6 +71,9 @@ func valueTypesWords(kind string) string {
 	return ":u32, :u64, :i32 or :i64"
 }
 
+// lpmFuncs sorts the harness's lpm rows (numerically by address, then prefixlen — the kernel's lpm_list gives the rows in byte order
+// and the twin (the Ruby model the harness runs in place of the kernel) in insertion order, so they are put in one order before
+// comparing).
 const lpmFuncs = `def _h_lkey(s)
   f = s.split(" ")[0].split("/")
   p = f[0].split(".")
@@ -99,6 +114,8 @@ func hasLpm(res *Result) bool {
 	return false
 }
 
+// lpmSetup returns the sort functions and the twin's mutation controls (lpm-shortest — shortest match; lpm-full-overwrite — an
+// overwrite of a full map gives −ENOSPC; test builds only).
 func lpmSetup(res *Result, kernel bool) string {
 	if !hasLpm(res) {
 		return ""
@@ -119,6 +136,7 @@ func lpmSetup(res *Result, kernel bool) string {
 	return b.String()
 }
 
+// lpmList is the expression for all rows of an lpm map ("a.b.c.d/n v" — _h_list for the twin, lpm_list for the kernel).
 func lpmList(m *MapDecl, kernel bool) string {
 	if kernel {
 		return fmt.Sprintf("_h_obj.lpm_list(%s)", m.Const)
@@ -126,6 +144,7 @@ func lpmList(m *MapDecl, kernel bool) string {
 	return m.Const + "._h_list"
 }
 
+// lpmReset empties an lpm map (the twin uses reset; for the kernel every prefix is removed).
 func lpmReset(m *MapDecl, kernel bool) string {
 	if !kernel {
 		return fmt.Sprintf("      %s.reset\n", m.Const)
@@ -133,10 +152,14 @@ func lpmReset(m *MapDecl, kernel bool) string {
 	return fmt.Sprintf("      _h_ll = %s\n      _h_li = 0\n      while _h_li < _h_ll.length\n        _h_obj.lpm_remove(%s, _h_ll[_h_li].split(\" \")[0])\n        _h_li += 1\n      end\n", lpmList(m, true), m.Const)
 }
 
+// lpmDump prints an lpm map's rows in numeric order as `M{a.b.c.d/n v}`.
 func lpmDump(m *MapDecl, kernel bool) string {
 	return fmt.Sprintf("      _h_ll = _h_lsort(%s)\n      _h_li = 0\n      while _h_li < _h_ll.length\n        puts \"%s{#{_h_ll[_h_li]}}\"\n        _h_li += 1\n      end\n", lpmList(m, kernel), m.Name)
 }
 
+// lpmCmds returns the harness's lpm commands: `lput M prefix v` (0 or −28), `lremove M prefix` (0 or −2), `lmatch M addr` (the value
+// or absent), `lhas M addr`. For the kernel they use the user-space API (lpm_put's full-map Other with ENOSPC becomes −28, and
+// lpm_match's NotFound becomes absent — matching the twin's numeric spelling).
 func lpmCmds(res *Result, kernel bool) string {
 	var b strings.Builder
 	for _, m := range res.Maps {

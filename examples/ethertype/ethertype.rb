@@ -1,10 +1,10 @@
 require "bpf"
 
-
-
-Ether = BPF::ArrayMap.new("Ether", :u64, 8)
-Proto = BPF::ArrayMap.new("Proto", :u64, 256)
-Udp = BPF::ArrayMap.new("Udp", :u64, 2)
+# The eBPF side — counts per Ethernet EtherType, per IPv4 protocol, and of UDP packets to dst port 9999.
+# Every read goes through a checked window (`w = ctx.check(off, len)` followed by `if w`); a short frame is counted in the out-of-range branch.
+Ether = BPF::ArrayMap.new("Ether", :u64, 8)   # 0 IPv4, 1 IPv6, 2 ARP, 3 VLAN, 4 other, 5 short frame, 6 IPv4 header too short, 7 IHL < 5
+Proto = BPF::ArrayMap.new("Proto", :u64, 256) # one slot per IPv4 protocol
+Udp = BPF::ArrayMap.new("Udp", :u64, 2)       # 0 count of dst port 9999, 1 last dst port
 
 def count_ether(ctx)
   eth = ctx.check(0, 14)
@@ -16,12 +16,12 @@ def count_ether(ctx)
       if ip
         ihl = ip.u8(0) & 0x0F
         if ihl < 5
-          Ether.atomic_add(7, 1)
+          Ether.atomic_add(7, 1) # malformed header: the verifier would pass it, so the program's own branch skips reading it
         else
           proto = ip.u8(9)
           Proto.atomic_add(proto, 1)
           if proto == 17
-            l4 = ctx.check(14 + ihl * 4, 4)
+            l4 = ctx.check(14 + ihl * 4, 4) # variable offset (a non-root loader needs CAP_PERFMON)
             if l4
               port = l4.be16(2)
               Udp.update(1, port)
@@ -50,9 +50,9 @@ def count_ether(ctx)
 end
 BPF.xdp :count_ether
 
-
-
-
+# The user-space side — plain Ruby (compiled by Spinel).
+#   ethertype --iface IF [--duration-ms MS]   attach, wait MS milliseconds, print the counts
+#   ethertype --selftest                     without attaching, run BPF_PROG_TEST_RUN on built frames (passed on 7.1.8, and on 6.12 and 6.6 in VMs)
 require "spinelbpf"
 
 USAGE = "usage: ethertype --iface IF [--duration-ms MS] | --selftest"
@@ -79,7 +79,7 @@ if iface == "" && !selftest
   raise USAGE
 end
 
-
+# frame builds an all-zero frame of length n with the EtherType, the IPv4 header fields (vihl, protocol) and the L4 dst port (zero values are not written).
 def frame(n, et, vihl, proto, port)
   f = Array.new(n, 0)
   f[12] = et >> 8
@@ -107,18 +107,18 @@ def show(obj)
   e
 end
 
-obj = SpinelBPF.load_embedded
+obj = SpinelBPF.load_embedded # load after checking the requirements against the kernel
 puts "unmet (not blocking): #{obj.unmet.length} (requirements policy #{SpinelBPF.policy_version})"
 if selftest
   frames = [
-    frame(64, 0x0800, 0x45, 17, 9999),
-    frame(64, 0x0800, 0x45, 17, 53),
-    frame(64, 0x0800, 0x46, 17, 9999),
-    frame(64, 0x0800, 0x45, 6, 80),
-    frame(64, 0x0800, 0x45, 1, 0),
-    frame(64, 0x0800, 0x44, 17, 9999),
-    frame(33, 0x0800, 0, 0, 0),
-    frame(34, 0x0800, 0x45, 17, 9999),
+    frame(64, 0x0800, 0x45, 17, 9999), # IPv4 UDP 9999
+    frame(64, 0x0800, 0x45, 17, 53),   # IPv4 UDP 53
+    frame(64, 0x0800, 0x46, 17, 9999), # IPv4 (IHL 6) UDP 9999
+    frame(64, 0x0800, 0x45, 6, 80),    # IPv4 TCP
+    frame(64, 0x0800, 0x45, 1, 0),     # IPv4 ICMP
+    frame(64, 0x0800, 0x44, 17, 9999), # IPv4 IHL 4 (malformed header)
+    frame(33, 0x0800, 0, 0, 0),        # IPv4 header too short (outside check(14, 20))
+    frame(34, 0x0800, 0x45, 17, 9999), # IPv4 UDP — the L4 window (34..38) is outside the frame
     frame(64, 0x86DD, 0, 0, 0),
     frame(60, 0x0806, 0, 0, 0),
     frame(64, 0x8100, 0, 0, 0),

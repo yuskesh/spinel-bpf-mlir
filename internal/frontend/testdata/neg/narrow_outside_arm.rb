@@ -1,6 +1,6 @@
 require "bpf"
 
-
+# Outside the arm — after the if the range is the join (union), not narrowed
 Hist = Struct.new(:hist, :n)
 BPF.record(Hist, hist: [:u32, 8], n: :u64)
 Hs = BPF::RecordMap.new("Hs", Hist.new(Array.new(8, 0), 0), 1)

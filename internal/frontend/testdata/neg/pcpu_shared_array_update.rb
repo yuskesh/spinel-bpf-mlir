@@ -1,6 +1,6 @@
 require "bpf"
 
-
+# lookup → update of the same key on a shared array is outside the per-CPU exemption (SB019)
 A = BPF::ArrayMap.new("A", :i64, 2)
 def prog(ctx)
   p = A.lookup(0)

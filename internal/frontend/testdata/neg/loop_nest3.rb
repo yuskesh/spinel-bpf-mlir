@@ -2,7 +2,7 @@ require "bpf"
 
 Out = BPF::ArrayMap.new("Out", :i64, 4)
 
-
+# Three levels of nesting
 def prog(ctx)
   s = 0
   2.times do |i|

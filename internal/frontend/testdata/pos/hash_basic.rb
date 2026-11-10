@@ -1,6 +1,6 @@
 require "bpf"
 
-
+# hash / lru_hash: integer and record keys, integer and record values, three ways to take the status, add_or_init, reads, writes and atomic_add inside present
 FlowKey = Struct.new(:proto, :_pad0, :port, :addr)
 BPF.record(FlowKey, proto: :u8, _pad0: :u8, port: :u16, addr: :u32)
 Stat = Struct.new(:frames, :bytes)

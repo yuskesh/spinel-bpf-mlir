@@ -1,6 +1,6 @@
 require "bpf"
 
-
+# sched_cls (tcx ingress): the same check and window reads as with XdpMd, BPF::TC_PASS
 Counts = BPF::ArrayMap.new("Counts", :u64, 4)
 
 def count_in(skb)

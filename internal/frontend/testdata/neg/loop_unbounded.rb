@@ -2,7 +2,7 @@ require "bpf"
 
 Out = BPF::ArrayMap.new("Out", :i64, 4)
 
-
+# The upper end of the count's range is above 64 (a raw packet byte — [0, 255])
 def prog(ctx)
   k = 0
   w = ctx.check(0, 1)

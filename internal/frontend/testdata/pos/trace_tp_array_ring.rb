@@ -1,8 +1,8 @@
 require "bpf"
 
-
-
-
+# Fixed byte-array tracepoint fields: sock/inet_sock_set_state's daddr[4] (offset 36) and daddr_v6[16] (offset 56)
+# copied by ctx.copy(:f) into array members of a ring event (a ring reservation as ebpf.tp.field.copy's destination).
+# On TCP (6) CLOSE (7) → SYN_SENT (2) (active connect) for the Filter tgid into Events {family, dport, daddr, daddr_v6}; on success add 1 to Out[0]
 Ev = Struct.new(:family, :dport, :daddr, :daddr_v6)
 BPF.record(Ev, family: :u16, dport: :u16, daddr: [:u8, 4], daddr_v6: [:u8, 16])
 

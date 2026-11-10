@@ -1,6 +1,6 @@
 require "bpf"
 
-
+# A constant index outside the range [0, 7]
 Hist = Struct.new(:hist, :n)
 BPF.record(Hist, hist: [:u32, 8], n: :u64)
 Hs = BPF::RecordMap.new("Hs", Hist.new(Array.new(8, 0), 0), 4)

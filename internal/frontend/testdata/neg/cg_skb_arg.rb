@@ -1,6 +1,6 @@
 require "bpf"
 
-
+# Tracing API on the cgroup_skb context
 Out = BPF::ArrayMap.new("Out", :u64, 1)
 
 def p(skb)

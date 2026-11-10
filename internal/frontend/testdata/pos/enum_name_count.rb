@@ -1,5 +1,5 @@
 require "bpf"
-
+# A program where an Enumerable method name (count) makes Spinel splice in its builtins; the frontend corrects the line shift and accepts it (it used to stop with SB000)
 
 Counts = BPF::ArrayMap.new("Counts", :u64, 2)
 

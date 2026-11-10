@@ -1,6 +1,6 @@
 require "bpf"
 
-
+# An array length outside 1..64 (65)
 Hist = Struct.new(:hist, :n)
 BPF.record(Hist, hist: [:u32, 65], n: :u64)
 Hs = BPF::RecordMap.new("Hs", Hist.new(Array.new(65, 0), 0), 4)

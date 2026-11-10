@@ -1,6 +1,6 @@
 require "bpf"
 
-
+# cgroup_skb without a direction
 def p(skb)
   BPF::CG_ALLOW
 end

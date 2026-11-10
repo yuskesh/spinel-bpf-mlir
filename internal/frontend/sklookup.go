@@ -2,12 +2,21 @@ package frontend
 
 import "math/big"
 
+// sk_lookup and sk.assign: `Socks = BPF::SockMap.new("Socks", :u64, n)` (the key is a u32 index and the value a socket — user space
+// puts an fd in with `obj.map_put`), and the sk_lookup program statement `st = Socks.assign(ctx, k)`, which wraps lookup → present
+// check → assign → release in one API (the same shape as in go-bpf-mlir — a socket reference never becomes a Ruby value). st is
+// sk_assign's raw status, or skAssignAbsent when there is no entry.
+// st follows SB026's rule for locals (assigned once and read — a failure status is not thrown away).
+
+// skAssignAbsent is st for a slot with no entry (−ENOENT — the kernel helper is not called; it is a sentinel the frontend puts in).
 const skAssignAbsent = -2
 
+// isSkAssign reports whether v is the CallNode of `M.assign(…)` (M is a constant — skAssignStmt checks that it is a map).
 func (c *progCtx) isSkAssign(v *Node) bool {
 	return v != nil && v.Type == "CallNode" && v.Str["name"] == "assign" && c.a.ref(v, "receiver") != nil && c.a.ref(v, "receiver").Type == "ConstantReadNode"
 }
 
+// skAssignStmt handles `st = M.assign(ctx, k)` (w is a LocalVariableWriteNode).
 func (c *progCtx) skAssignStmt(w *Node) (Stmt, bool) {
 	name, v := w.Str["name"], c.a.ref(w, "value")
 	if c.prog.Kind != "sk_lookup" {
@@ -55,10 +64,12 @@ func (c *progCtx) skAssignStmt(w *Node) (Stmt, bool) {
 	if !c.valueOK(k, as[1]) {
 		return Stmt{}, false
 	}
-	c.env[name] = &varInfo{Iv: iv(new(big.Int).Neg(new(big.Int).Lsh(big.NewInt(1), 63)), new(big.Int))}
+	c.env[name] = &varInfo{Iv: iv(new(big.Int).Neg(new(big.Int).Lsh(big.NewInt(1), 63)), new(big.Int))} // 0 or negative
 	return Stmt{Kind: "skassign", Var: name, Map: m, Key: k, Pos: c.z.pos(c.a, w)}, true
 }
 
+// skAssign lowers "skassign": sock.map_lookup → sock.ref_check (present: sk.assign → release → yield; absent: yield the sentinel),
+// and puts the i64 in Var.
 func (l *lowerer) skAssign(s Stmt) error {
 	k, err := l.expr(s.Key)
 	if err != nil {
@@ -67,7 +78,7 @@ func (l *lowerer) skAssign(s Stmt) error {
 	k32, sr, st, ab := l.val(), l.val(), l.val(), l.val()
 	l.emit("%s = arith.trunci %s : i64 to i32 %s", k32, k.name, loc(s.Pos))
 	absent := skAssignAbsent
-	if mutation("skassign-absent-zero") {
+	if mutation("skassign-absent-zero") { // mutation: make the no-entry sentinel 0 (the same value as "selected")
 		absent = 0
 	}
 	l.emit("%s = arith.constant %d : i64 %s", ab, absent, loc(s.Pos))

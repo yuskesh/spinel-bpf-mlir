@@ -1,6 +1,6 @@
 require "bpf"
 
-
+# Overflowing + 1 in the value of a read-modify-write of the same u64 hash entry — before the fix SB014 hid the RMW
 H = BPF::HashMap.new("H", :u32, :u64, 16)
 
 def prog(ctx)

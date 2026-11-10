@@ -1,6 +1,6 @@
 require "bpf"
 
-
+# The arithmetic result of a member read (poly) as an operator receiver — stays SB004 at the narrow-range boundary
 Stat = Struct.new(:hits, :bytes)
 BPF.record(Stat, hits: :u32, bytes: :u32)
 Stats = BPF::RecordMap.new("Stats", Stat.new(0, 0), 2)

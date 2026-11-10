@@ -1,6 +1,6 @@
 require "bpf"
 
-
+# 256 for ip_proto (u8)
 def p(ctx)
   ctx.set_key(:ip_proto, 256)
   BPF::FLOW_OK

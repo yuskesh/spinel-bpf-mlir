@@ -1,6 +1,6 @@
 require "bpf"
 
-
+# kprobe: sums register 2 of do_sys_poll(ufds, nfds, end_time) (nfds, unsigned int) per own tgid
 Filter = BPF::ArrayMap.new("Filter", :u32, 1)
 Sums = BPF::HashMap.new("Sums", :u32, :u64, 64)
 

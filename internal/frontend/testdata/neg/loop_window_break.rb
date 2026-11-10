@@ -3,7 +3,7 @@ require "bpf"
 Out = BPF::ArrayMap.new("Out", :u64, 8)
 H = BPF::HashMap.new("H", :u32, :u64, 16)
 
-
+# break inside a window arm (a packet.check arm cannot leave the loop)
 def prog(ctx)
   off = 14
   8.times do |i|

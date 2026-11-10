@@ -1,6 +1,6 @@
 require "bpf"
 
-
+# A field not in the table (rx_queue_index) on the xdp context
 Out = BPF::ArrayMap.new("Out", :u32, 1)
 
 def p(ctx)

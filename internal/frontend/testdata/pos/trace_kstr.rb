@@ -1,7 +1,7 @@
 require "bpf"
 
-
-
+# The string behind a char * member of a kernel struct: fentry/security_bprm_check, linux_binprm's filename (the path passed to execve).
+# Only execs of the Filter tgid (the pid of the child the harness forked), into Events {name: filename's first 31 bytes and a NUL, st: probe_read_kernel_str's status}
 Bprm = Struct.new(:filename)
 BPF.kernel_type(Bprm, "linux_binprm", filename: :strptr)
 BprmT = BPF::KernelType.new(Bprm.new(""))

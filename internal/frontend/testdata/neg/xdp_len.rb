@@ -1,6 +1,6 @@
 require "bpf"
 
-
+# len on the xdp context (ctx.len was added for socket_filter only)
 Out = BPF::ArrayMap.new("Out", :u32, 1)
 
 def p(ctx)

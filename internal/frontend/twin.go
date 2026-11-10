@@ -6,6 +6,11 @@ import (
 	"strings"
 )
 
+// NativeTwin builds the model program for differential testing (the "twin" — the same Ruby run natively instead of in the kernel):
+// it keeps the user's root defs, map declarations, `require "bpf"` and `BPF.xdp` lines as they are and blanks every other line
+// (lines and columns do not move, so the twin's type records can be compared with the injection analysis's records by the same
+// key), then appends a harness that calls each root n times (ARGV[0]) and prints the return values and every map slot. It is
+// built with `spinel -I ruby/lib/native` (tests only).
 func NativeTwin(text string, res *Result) (string, error) {
 	if err := noTracing(res, "native twin"); err != nil {
 		return "", err
@@ -25,7 +30,7 @@ func NativeTwin(text string, res *Result) (string, error) {
 	}
 	for _, m := range res.Maps {
 		if m.IsLpm() {
-			fmt.Fprintf(&b, "puts \"twin %s entries=#{%s._h_list.length}\"\n", m.Name, m.Const)
+			fmt.Fprintf(&b, "puts \"twin %s entries=#{%s._h_list.length}\"\n", m.Name, m.Const) // an LPM trie map: print only its entry count
 			continue
 		}
 		if m.Record != nil {

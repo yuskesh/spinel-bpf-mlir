@@ -1,6 +1,6 @@
 require "bpf"
 
-
+# Two roots, xdp and sched_cls, share one map (the same read is written in both; calling a user def on the eBPF side is outside the subset (SB002))
 Protos = BPF::ArrayMap.new("Protos", :u64, 3)
 
 def on_xdp(ctx)

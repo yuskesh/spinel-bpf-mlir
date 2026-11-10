@@ -8,15 +8,20 @@ import (
 
 func sortStrings(s []string) { sort.Strings(s) }
 
+// Output is what the frontend generates.
 type Output struct {
-	Result  *Result
-	MLIR    string
-	Schema  []byte
-	Maps    []byte
-	Domain  []byte
+	Result *Result
+	MLIR   string
+	Schema []byte
+	Maps   []byte
+	Domain []byte
+	// Records is the embedded layout table (RecordsTable — empty when there is no record map)
 	Records string
 }
 
+// Generate analyses the source and, when no finding stops it, produces the outputs. When a finding stops it, it returns *Error (with
+// the Domain, which includes the findings). work is the directory for Spinel's analysis (under the build directory — nothing is
+// written to the directory of the user's source).
 func Generate(sp Spinel, work, sourcePath string) (*Output, error) {
 	text, err := os.ReadFile(sourcePath)
 	if err != nil {

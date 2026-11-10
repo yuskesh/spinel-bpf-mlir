@@ -1,6 +1,6 @@
 require "bpf"
 
-
+# Packet windows in a loop body: walk up to 8 TLVs after Ethernet (the offset is an iter_arg; a window lives within one iteration only)
 Types = BPF::ArrayMap.new("Types", :u64, 8)
 Seen = BPF::HashMap.new("Seen", :u32, :u64, 64)
 Counts = BPF::ArrayMap.new("Counts", :u64, 1)

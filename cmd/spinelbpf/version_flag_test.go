@@ -8,11 +8,15 @@ import (
 	"testing"
 )
 
+// TestVersionFlag: the shape of `spinelbpf --version` (and `version`) — the first line is the version and the build's
+// commit (the vcs stamp — 12 digits, plus +dirty if the tree was dirty); the following lines are the required bpf-mlir
+// version, the bml / spinel pins and ebpf-compile's version. A build without a stamp (`-buildvcs=false`) prints
+// `(commit unknown)`.
 func TestVersionFlag(t *testing.T) {
-	parallel(t)
+	parallel(t) // needs no exclusive resource
 	cfg, _ := defaultConfig()
 	d := t.TempDir()
-	want := versionFlagWant
+	want := versionFlagWant // the expectation for each form (form_{dev,public}_test.go)
 	for _, c := range []struct {
 		name, flag, commit string
 	}{{"vcs", "-buildvcs=true", `\(commit [0-9a-f]{12}(\+dirty)?\)`}, {"novcs", "-buildvcs=false", `\(commit unknown\)`}} {
@@ -29,6 +33,7 @@ func TestVersionFlag(t *testing.T) {
 			}
 		}
 	}
+	// The existing use of build does not change (with no arguments: usage, rc 2)
 	var so, se strings.Builder
 	if rc := run(nil, &so, &se); rc != 2 || !strings.Contains(se.String(), "spinelbpf --version") {
 		t.Errorf("run(): rc %d stderr %q", rc, se.String())

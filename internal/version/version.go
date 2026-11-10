@@ -1,3 +1,10 @@
+// Package version holds spinel-bpf-mlir's version string and the dependency pins.
+//
+// Version is the release version (v0.x — no compatibility promise, docs/release.md). It does not change until the next
+// release (so that the version line of the generated `.mlir` does not drift; builds between releases are told apart by
+// the commit in `--version`). BML and Spinel are the leading digits of the submodules' pinned commits (TestVersionPins
+// checks them against the gitlinks — raising a pin and forgetting the constant fails). The bpf-mlir version is the
+// go.mod require (read from the build information).
 package version
 
 import (
@@ -7,13 +14,20 @@ import (
 )
 
 const (
-	Version = "v0.9.1"
-	BML     = "41ec56f"
+	Version = "v0.10.0"
+	BML     = "065901b"
 	Spinel  = "086d514d"
 )
 
+// BpfMLIRModule (bpf-mlir's Go module — the go.mod require) and bpfMLIRLine come from a pair of files split between the
+// development build and the public build (version_public.go is the public build's file).
+
+// MLIRLine is the second line of the generated `.mlir` (the version only — no commit: artefacts stay reproducible within
+// a version).
 func MLIRLine() string { return "// spinel-bpf-mlir " + Version + "\n" }
 
+// Commit is the build's vcs stamp (`<12 digits>`, plus `+dirty` if the tree was dirty). Without a stamp it is
+// "unknown" (never silently empty).
 func Commit(bi *debug.BuildInfo) string {
 	if bi == nil {
 		return "unknown"
@@ -39,6 +53,9 @@ func Commit(bi *debug.BuildInfo) string {
 	return rev
 }
 
+// BpfMLIR is the bpf-mlir version in the go.mod require (with a replace, still the required version — the replacement
+// goes into a note: the version of its content is unknown. The authoritative version checks are ebpf-compile's --version
+// and the check of bml's header).
 func BpfMLIR(bi *debug.BuildInfo) string {
 	if bi != nil {
 		for _, d := range bi.Deps {
@@ -59,6 +76,7 @@ func BpfMLIR(bi *debug.BuildInfo) string {
 	return "unknown (no build information)"
 }
 
+// Text is the output of `spinelbpf --version` (ec is the first line of ebpf-compile's --version, or "" if none).
 func Text(ec string) string {
 	bi, _ := debug.ReadBuildInfo()
 	var b strings.Builder

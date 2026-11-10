@@ -1,6 +1,6 @@
 require "bpf"
 
-
+# The socket_filter context field mark (a context without a packet — only len)
 Out = BPF::ArrayMap.new("Out", :u32, 1)
 
 def p(skb)

@@ -1,7 +1,7 @@
 require "bpf"
 
-
-
+# tp_btf sched_process_fork: copying an array field (`r.load.comm = t.copy(:comm)` → ebpf.kfield.copy, a fixed 16 bytes).
+# On forks whose parent tgid is Cfg[0]: the child's comm and pid into Recs[0], real_parent's comm into Recs[1] (a copy inside a pointer chase's then branch).
 Task = Struct.new(:pid, :tgid, :real_parent, :comm)
 BPF.kernel_type(Task, "task_struct", pid: :i32, tgid: :i32, real_parent: [:kptr, Task], comm: [:u8, 16])
 TaskT = BPF::KernelType.new(Task.new(0, 0, 0, Array.new(16, 0)))

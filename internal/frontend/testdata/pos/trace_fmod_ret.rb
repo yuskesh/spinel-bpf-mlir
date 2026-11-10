@@ -1,9 +1,9 @@
 require "bpf"
 
-
-
-
-
+# fmod_ret: bpf_modify_return_test(int a, int *b) (the kernel's tracing test run calls it with (1, &b); b is 2, and the original function
+# does *b += 1 and returns a + *b = 4). Only named return values: BPF::FMOD_CALL (the original function) and BPF.fmod_return(e) (e's range excludes 0).
+# on_guard: for the Filter tgid add a to Out[0]; replace with −1 when Cfg[0] is 1, otherwise the original function. on_val: replace with (a & 0xFF) + 1 (range [1, 256]).
+# on_obs (fexit): the return value after the trampoline into Out[3], the observation count into Out[2] (bml's test run does not return retval)
 Filter = BPF::ArrayMap.new("Filter", :u32, 1)
 Cfg = BPF::ArrayMap.new("Cfg", :u32, 1)
 Out = BPF::ArrayMap.new("Out", :i64, 4)

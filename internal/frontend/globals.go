@@ -6,19 +6,26 @@ import (
 	"strings"
 )
 
+// Global variables: settings in .rodata (BPF::Config — a value is required at load; BPF::OptionalConfig — 0 when not given) and
+// counters in .bss (BPF::Counter — ebpf.global.atomic_add; :u32 / :u64 / :i32 / :i64). bpf-mlir's only ops are ebpf.global.load
+// and ebpf.global.atomic_add (there is no store).
+
+// GlobalDecl is a global's declaration.
 type GlobalDecl struct {
 	Const    string
 	Name     string
-	Class    string
-	Section  string
+	Class    string // "Config" / "OptionalConfig" / "Counter"
+	Section  string // "rodata" / "bss"
 	Bits     int
 	Signed   bool
 	Optional bool
 	Pos      Pos
 }
 
+// Counter reports whether g is a counter in .bss.
 func (g *GlobalDecl) Counter() bool { return g.Class == "Counter" }
 
+// TypeName returns a name such as :u16 (u / i and the width).
 func (g *GlobalDecl) TypeName() string {
 	if g.Signed {
 		return fmt.Sprintf("i%d", g.Bits)
@@ -26,8 +33,11 @@ func (g *GlobalDecl) TypeName() string {
 	return fmt.Sprintf("u%d", g.Bits)
 }
 
+// globalClasses maps a declaration's receiver to the class name.
 var globalClasses = map[string]string{"BPF::Config": "Config", "BPF::OptionalConfig": "OptionalConfig", "BPF::Counter": "Counter"}
 
+// globalDecl reads `X = BPF::Config.new("X", :u16)` and the like (a wrong shape is SB029). If n is not such a declaration it returns
+// false (it goes on to the other declarations, such as maps).
 func (z *analyzer) globalDecl(a *AST, n *Node) bool {
 	v := a.ref(n, "value")
 	if v == nil || v.Type != "CallNode" || v.Str["name"] != "new" {
@@ -78,6 +88,8 @@ func (z *analyzer) globalDecl(a *AST, n *Node) bool {
 	return true
 }
 
+// checkGlobalNames checks that no global's name collides with a map, ring buffer or program name (they share the ELF symbol
+// namespace — a rule of bpf-mlir's schema).
 func (z *analyzer) checkGlobalNames(roots []rootDecl) {
 	taken := map[string]string{}
 	for _, m := range z.mapOrder {
@@ -96,8 +108,10 @@ func (z *analyzer) checkGlobalNames(roots []rootDecl) {
 	}
 }
 
+// globalValueCallees are the library callees of `X.value` (per class).
 var globalValueCallees = map[string]string{"Config": "Config#value", "OptionalConfig": "OptionalConfig#value", "Counter": "Counter#value"}
 
+// globalRead handles `X.value` (an expression). Any other method is SB029.
 func (c *progCtx) globalRead(n *Node, g *GlobalDecl, name string, as []*Node, p Pos) *Expr {
 	if name == "add" {
 		if !g.Counter() {
@@ -129,6 +143,8 @@ func (c *progCtx) globalRead(n *Node, g *GlobalDecl, name string, as []*Node, p 
 	return e
 }
 
+// globalAdd handles the statement `C.add(d)` (Counter only — a 32-bit counter adds the low 32 bits of the delta: u32 and i32 have
+// the same bits).
 func (c *progCtx) globalAdd(n *Node, g *GlobalDecl, as []*Node, refVar string) (Stmt, bool) {
 	if !g.Counter() {
 		c.add(Rejected, SB029GlobalShape, n, "%s is a %s (.rodata — set at load) and has no `add` — only a Counter (.bss) adds", g.Const, g.Class)
@@ -146,6 +162,8 @@ func (c *progCtx) globalAdd(n *Node, g *GlobalDecl, as []*Node, refVar string) (
 		c.add(Rejected, SB011ShadowedName, n, "`%s.add` resolves to %q, not BPF::Counter#add", g.Const, callee)
 		return Stmt{}, false
 	}
+	// the delta reads the same Counter's value (directly or through a local) — the same kind as a map atomic_add whose delta reads the
+	// same entry. The form that crosses functions is handled by the summaries
 	c.noteFlowKey(as[0], "g:"+g.Const, n)
 	if c.derivedRefs(as[0])["@g"+g.Const] {
 		c.add(Rejected, SB019SharedReadModifyWrite, n, "`%s.add` adds a value read from %s itself (`%s.value`) — concurrent CPUs read the same old value and lose updates; use a delta that does not read %s", g.Const, g.Const, g.Const, g.Const)
@@ -167,6 +185,7 @@ func (c *progCtx) globalAdd(n *Node, g *GlobalDecl, as []*Node, refVar string) (
 	return Stmt{Kind: "gadd", Glob: g, Val: e, Pos: c.z.pos(c.a, n)}, true
 }
 
+// usedGlobalsOf returns the globals the programs use (in declaration order).
 func usedGlobalsOf(order []*GlobalDecl, progs []*Program) []*GlobalDecl {
 	used := map[*GlobalDecl]bool{}
 	for _, p := range progs {
@@ -183,6 +202,8 @@ func usedGlobalsOf(order []*GlobalDecl, progs []*Program) []*GlobalDecl {
 	return out
 }
 
+// globalRows returns the G rows of the embedded table (`G|name|section|type|opt` — opt is 1 / 0; the library builds the config's
+// optional column from it).
 func globalRows(gs []*GlobalDecl) string {
 	var b strings.Builder
 	for _, g := range gs {
@@ -195,6 +216,9 @@ func globalRows(gs []*GlobalDecl) string {
 	return b.String()
 }
 
+// widthRange is the interval of an integer of width bits (8, 16, 32, 64): u is [0, 2^bits − 1], i is [−2^(bits−1), 2^(bits−1) − 1]
+// (the caller handles u64 with Wide). typeRange (only the map value widths 32 / 64) gave 8- and 16-bit types the 64-bit interval,
+// which was too wide (on the safe side, but it caused false SB014s).
 func widthRange(bits int, signed bool) Ival {
 	if bits >= 64 {
 		if signed {
@@ -209,6 +233,7 @@ func widthRange(bits int, signed bool) Ival {
 	return iv(new(big.Int).Neg(h), new(big.Int).Sub(h, big.NewInt(1)))
 }
 
+// counterRead returns the Counter if n reads a Counter's `G.value` (the origin mark is `@g<Const>`).
 func (c *progCtx) counterRead(n *Node) *GlobalDecl {
 	if n == nil || n.Type != "CallNode" || n.Str["name"] != "value" {
 		return nil

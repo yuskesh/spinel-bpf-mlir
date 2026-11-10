@@ -1,8 +1,8 @@
 require "bpf"
 
-
-
-
+# A fixed byte-array tracepoint field into a record map borrow: `r.load.daddr = ctx.copy(:daddr)` (a borrow as the destination of bpf-mlir's
+# ebpf.tp.field.copy). On TCP CLOSE → SYN_SENT for the Filter tgid, write the last {family, dport, daddr, daddr_v6} into Last[0] and
+# add 1 to Out[0] (a body ending in a member write gets SB010 from Spinel's type probe; existing behaviour, unrelated to the copy)
 Ev = Struct.new(:family, :dport, :daddr, :daddr_v6)
 BPF.record(Ev, family: :u16, dport: :u16, daddr: [:u8, 4], daddr_v6: [:u8, 16])
 

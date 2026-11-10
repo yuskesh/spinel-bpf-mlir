@@ -2,7 +2,7 @@ require "bpf"
 
 Out = BPF::ArrayMap.new("Out", :i64, 4)
 
-
+# Reads in the body the present value of a lookup made outside the loop
 def prog(ctx)
   p = Out.lookup(1)
   if p

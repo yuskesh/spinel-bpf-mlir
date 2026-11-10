@@ -1,6 +1,6 @@
 require "bpf"
 
-
+# An arm with an empty range (k > 10 && k < 5) does not narrow — an error inside the unreachable arm still stops
 Hist = Struct.new(:hist, :n)
 BPF.record(Hist, hist: [:u32, 8], n: :u64)
 Hs = BPF::RecordMap.new("Hs", Hist.new(Array.new(8, 0), 0), 1)

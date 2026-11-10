@@ -3,7 +3,7 @@ require "bpf"
 Counts = BPF::ArrayMap.new("Counts", :u64, 8)
 Bytes = BPF::ArrayMap.new("Bytes", :u64, 4)
 
-
+# EtherType classification: both the in_range and out_of_range branches choose the slot, then join
 def ether(ctx)
   w = ctx.check(0, 14)
   if w

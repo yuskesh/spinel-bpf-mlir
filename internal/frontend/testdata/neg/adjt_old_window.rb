@@ -1,6 +1,6 @@
 require "bpf"
 
-
+# Uses a window taken before adjust_tail afterwards
 Out = BPF::ArrayMap.new("Out", :i64, 2)
 
 def p(ctx)

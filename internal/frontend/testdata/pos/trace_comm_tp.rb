@@ -1,6 +1,6 @@
 require "bpf"
 
-
+# output_comm in a tracepoint (syscalls/sys_enter_getppid, no fields read): checks from the generated output that output_comm is not limited to one program kind
 Ev = Struct.new(:comm, :status)
 BPF.record(Ev, comm: [:u8, 16], status: :i64)
 

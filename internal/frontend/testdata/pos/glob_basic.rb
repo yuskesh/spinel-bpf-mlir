@@ -1,6 +1,6 @@
 require "bpf"
 
-
+# Global variables: .rodata Config (required) and OptionalConfig (0 when unset), .bss Counter (u64 and i32, with a negative add)
 Port = BPF::Config.new("Port", :u16)
 Verbose = BPF::OptionalConfig.new("Verbose", :u8)
 Hits = BPF::Counter.new("Hits", :u64)

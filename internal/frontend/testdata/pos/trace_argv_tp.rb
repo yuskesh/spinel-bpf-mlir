@@ -1,8 +1,8 @@
 require "bpf"
 
-
-
-
+# argv: slots 0..19 of argv (const char *const *, offset 24, 8 bytes, :user_str_array) of tracepoint syscalls/sys_enter_execve,
+# one ring event each via R.output_argv (bpf-mlir expands str_at into 20 nested present levels). Only for the Filter tgid (the harness's child).
+# 20 events do not tell "argv has exactly 20" from "21 or more (cut at the first 20)"
 Ev = Struct.new(:index, :pad, :arg, :status)
 BPF.record(Ev, index: :u32, pad: :u32, arg: [:u8, 32], status: :i64)
 

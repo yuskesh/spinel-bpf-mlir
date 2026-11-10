@@ -1,6 +1,6 @@
 require "bpf"
 
-
+# A socket_filter verdict inside a fentry program
 Counts = BPF::ArrayMap.new("Counts", :u64, 2)
 
 def on_t(ctx)

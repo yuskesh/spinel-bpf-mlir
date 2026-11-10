@@ -1,6 +1,6 @@
 require "bpf"
 
-
+# Early return: a guard directly in the program body (return BPF::XDP_DROP if / unless); later statements are analysed narrowed by the negated condition (k ∈ [0, 7])
 Hist = Struct.new(:hist, :n)
 BPF.record(Hist, hist: [:u32, 8], n: :u64)
 Hs = BPF::RecordMap.new("Hs", Hist.new(Array.new(8, 0), 0), 1)

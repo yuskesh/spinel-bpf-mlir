@@ -1,0 +1,435 @@
+/* csrc/driver/build.c - see build.h. Every step and message follows cmd/spinelbpf/build.go and link.go. */
+#define _GNU_SOURCE
+#include "build.h"
+
+#include <errno.h>
+#include <limits.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <unistd.h>
+
+#include "cfront.h"
+#include "checks.h"
+#include "pin.h"
+#include "pins.h"
+#include "seam.h"
+
+#ifndef SPINELBPF_REPO
+#error "SPINELBPF_REPO must name the source repository (scripts/build-c-driver.sh sets it)"
+#endif
+
+static const char *env_or(const char *k, const char *def)
+{
+	const char *v = getenv(k);
+	return v && *v ? v : def;
+}
+
+err_t default_config(struct config *c)
+{
+	memset(c, 0, sizeof *c);
+	const char *root = getenv("SPINELBPF_ROOT");
+	c->repo = xstrdup(root && *root ? root : SPINELBPF_REPO);
+	const char *loader = getenv("SPINELBPF_LOADER");
+	if (loader && *loader && strcmp(loader, "bml"))
+		return errf("SPINELBPF_LOADER=%s: the Go loader was removed — the only loader is bml (unset SPINELBPF_LOADER)", loader);
+	char *ec = xstrdup(env_or("EBPF_COMPILE", fp_join(c->repo, "build/bpf-mlir/bin/ebpf-compile")));
+	const char *llvm = env_or("LLVM_PREFIX", "/opt/llvm-23.1.1");
+	c->spinel = xstrdup(env_or("SPINEL", fp_join(c->repo, "third_party/spinel/bin/spinel")));
+	c->ebpf_compile = ec;
+	c->schema_check = fp_join(fp_dir(ec), "ebpf-schema-check");
+	c->clang = fp_join(llvm, "bin/clang");
+	c->line_info = "auto";
+	c->loader_libs = xstrdup(env_or("SPINELBPF_LOADER_LIBS", fp_join(c->repo, "build/bml/lib")));
+	return NULL;
+}
+
+/* The frontend is the C frontend in this process (cfront.c). It writes the seam layout (an emit and an inspect directory) that the
+ * Go frontend subprocess wrote before, and read_seam reads it. The Go driver's module step (the bpf-mlir Go module of the Go binary
+ * against the pin) has no counterpart: this binary links no Go module, so the compiler check is pin_check_compiler without the hook. */
+
+/* workDir: <repo>/build/spinelbpf/<name>-<sha256(abs)[:4] hex>-work. */
+static char *work_dir(const char *repo, const char *abs, const char *suffix)
+{
+	char h[65];
+	sha256_hex(abs, strlen(abs), h);
+	char *base = fp_base(abs);
+	size_t n = strlen(base);
+	if (n >= 3 && !strcmp(base + n - 3, ".rb"))
+		base[n - 3] = 0;
+	return fp_join(repo, xasprintf("build/spinelbpf/%s-%.8s-%s", base, h, suffix));
+}
+
+/* ---- helpers ---- */
+
+/* runIn: combined output; "<base>: <err>\n<trimmed output>". */
+static err_t run_in(const char *dir, char *const argv[])
+{
+	struct run_out o = {0};
+	err_t e = run_cmd(argv, dir, NULL, 1, &o);
+	if (!e)
+		return NULL;
+	return errf("%s: %s\n%s", fp_base(argv[0]), e, go_trim_space(o.out.p ? o.out.p : "", o.out.n));
+}
+
+static err_t write_out(struct build_result *r, const char *dir, const char *fname, const void *data, size_t len)
+{
+	char *p = fp_join(dir, fname);
+	err_t e = write_file(p, data, len);
+	if (e)
+		return e;
+	strv_push(&r->files, p);
+	return NULL;
+}
+
+/* compileELF: rc 0 gives the stderr text; a failure is an error text, or the SB030 refusal. */
+static err_t compile_elf(const struct config *c, const char *dir, const char *name, char **stderr_out, int *refused, struct diags *refusal)
+{
+	char *mlir = xasprintf("%s.mlir", name), *schema = xasprintf("%s.schema.json", name), *li = xasprintf("--line-info=%s", c->line_info),
+	     *obj = xasprintf("%s.bpf.o", name);
+	char *argv[] = {c->ebpf_compile, mlir, "--schema", schema, li, "-o", obj, NULL};
+	struct run_out o = {0};
+	err_t e = run_cmd(argv, dir, NULL, 0, &o);
+	const char *so = o.out.p ? o.out.p : "", *se = o.err.p ? o.err.p : "";
+	if (e) {
+		struct diag d;
+		if (unroll_budget(se, &d)) {
+			diags_push(refusal, d);
+			*refused = 1;
+			return NULL;
+		}
+		char *inner = xasprintf("%s: %s\n%s%s", fp_base(c->ebpf_compile), e, so, go_trim_space(se, o.err.n));
+		return errf("ebpf-compile: %s", rewrite_locs(inner));
+	}
+	if (o.out.n > 0) {
+		struct diags ignored = {0};
+		err_t pe = add_compile_warnings(&ignored, so, "");
+		return pe ? pe : errf("internal: ebpf-compile stdout was not refused");
+	}
+	*stderr_out = xstrdup(se);
+	return NULL;
+}
+
+/* embedAsmRecords. */
+static char *embed_asm(const char *elf, const char *sha, const char *maps, const char *records)
+{
+	char *qe = go_quote(elf, strlen(elf)), *qs = go_quote(sha, strlen(sha)), *qm = go_quote(maps, strlen(maps));
+	if (!qe || !qs || !qm)
+		not_ported("%%q of a non-ASCII file name in _embed.S");
+#if defined(E175_MUT) && E175_MUT == 2
+	/* mutation control ("embed", which the differential against the Go driver must catch): one changed byte in _embed.S, the
+	 * first hex digit of the schema sha; never in a default build */
+	qs[1] = qs[1] == '0' ? '1' : '0';
+#endif
+	struct sb rec = {0};
+	if (*records) {
+		sb_puts(&rec, "  .globl spinelbpf_records\nspinelbpf_records:\n  .asciz \"");
+		for (const char *p = records; *p; p++) {
+			if (*p == '\n')
+				sb_puts(&rec, "\\n");
+			else
+				sb_putc(&rec, *p);
+		}
+		sb_puts(&rec, "\"\n");
+	}
+	return xasprintf("# Code generated by spinelbpf. DO NOT EDIT.\n"
+			 "  .section .rodata.spinelbpf_elf,\"a\"\n"
+			 "  .balign 8\n"
+			 "  .globl spinelbpf_elf_start\n"
+			 "spinelbpf_elf_start:\n"
+			 "  .incbin %s\n"
+			 "  .globl spinelbpf_elf_end\n"
+			 "spinelbpf_elf_end:\n"
+			 "  .globl spinelbpf_schema_sha\n"
+			 "spinelbpf_schema_sha:\n"
+			 "  .asciz %s\n"
+			 "  .globl spinelbpf_maps_json\n"
+			 "spinelbpf_maps_json:\n"
+			 "  .incbin %s\n"
+			 "  .byte 0\n"
+			 "%s  .section .note.GNU-stack,\"\",@progbits\n",
+			 qe, qs, qm, rec.p ? rec.p : "");
+}
+
+/* unverifiedBPFMLIRCommit (seam_pin_{dev,public}.go). */
+static err_t unverified_commit(const struct config *c, char **out)
+{
+#ifdef SPINELBPF_PUBLIC
+	(void)c;
+	*out = xstrdup(PIN_RELEASE_COMPILER_COMMIT);
+	return NULL;
+#else
+	char *git = NULL;
+	/* exec.Command("git", …) looks git up on PATH */
+	const char *path = getenv("PATH");
+	if (path) {
+		char *pp = xstrdup(path);
+		for (char *s = strtok(pp, ":"); s; s = strtok(NULL, ":")) {
+			char *cand = fp_join(*s ? s : ".", "git");
+			if (access(cand, X_OK) == 0) {
+				git = cand;
+				break;
+			}
+		}
+	}
+	if (!git)
+		return errf("seam: reading the third_party/bpf-mlir gitlink: exec: \"git\": executable file not found in $PATH");
+	char *argv[] = {git, "-C", c->repo, "rev-parse", "HEAD:third_party/bpf-mlir", NULL};
+	struct run_out o = {0};
+	err_t e = run_cmd(argv, NULL, NULL, 0, &o);
+	if (e)
+		return errf("seam: reading the third_party/bpf-mlir gitlink: %s", e);
+	*out = go_trim_space(o.out.p ? o.out.p : "", o.out.n);
+	return NULL;
+#endif
+}
+
+/* reuseCommitted. */
+static err_t reuse_committed(struct build_result *r, const char *dir, const char *name, const struct seam_input *in)
+{
+	struct {
+		const char *ext;
+		const char *got;
+		size_t len;
+	} f[] = {{".mlir", in->mlir, in->mlir_len}, {".schema.json", in->schema, in->schema_len}, {".maps.json", in->maps, in->maps_len}};
+	for (size_t i = 0; i < 3; i++) {
+		char *fname = xasprintf("%s%s", name, f[i].ext), *want;
+		size_t wl;
+		err_t e = read_file(fp_join(dir, fname), &want, &wl);
+		if (e || wl != f[i].len || memcmp(want, f[i].got, wl))
+			return errf("ebpf-compile (or ebpf-schema-check / clang) is not available and %s differs from the committed one — the "
+				    "eBPF side changed, so it must be compiled (run scripts/setup.sh)",
+				    fname);
+	}
+	const char *exts[] = {".bpf.o", "_embed.o"};
+	for (size_t i = 0; i < 2; i++) {
+		char *fname = xasprintf("%s%s", name, exts[i]);
+		if (!path_exists(fp_join(dir, fname)))
+			return errf("ebpf-compile is not available and %s is missing — run scripts/setup.sh", fname);
+	}
+	char *cw;
+	size_t cl;
+	if (read_file(fp_join(dir, xasprintf("%s.compile_warnings.txt", name)), &cw, &cl))
+		return errf("ebpf-compile is not available and %s.compile_warnings.txt is missing — run scripts/setup.sh (the committed warnings "
+			    "of the ELF are part of the generated artefacts)",
+			    name);
+	err_t e = add_compile_warnings(&r->diags, "", cw);
+	if (e)
+		return errf("%s.compile_warnings.txt: %s", name, e);
+	r->reused = 1;
+	return NULL;
+}
+
+/* ---- Build ---- */
+
+static err_t build_inner(const struct config *c, const char *source, struct build_result *r, int *refused, struct diags *refusal,
+			 char **work_out, char **scratch_out)
+{
+	int seam = c->seam_emit != NULL;
+	char err[4096];
+	if (!seam) {
+		if (!path_exists(c->spinel))
+			return errf("tool not found: %s (run scripts/setup.sh, or set SPINEL)", c->spinel);
+		if (pin_check_spinel(c->spinel, c->repo, err, sizeof err))
+			return errf("%s", err);
+	}
+	int compile = path_exists(c->ebpf_compile) && path_exists(c->schema_check) && path_exists(c->clang);
+	char verified[41] = "";
+	if (compile) {
+		if (pin_check_compiler(c->ebpf_compile, c->repo, verified, err, sizeof err))
+			return errf("%s", err);
+	}
+	char *abs;
+	err_t e = fp_abs(source, &abs);
+	if (e)
+		return e;
+	char *dir = fp_dir(abs), *base = fp_base(abs);
+	size_t bl = strlen(base);
+	char *name = bl >= 3 && !strcmp(base + bl - 3, ".rb") ? xstrndup(base, bl - 3) : xstrdup(base);
+	if (!strcmp(name, base) || !*name)
+		return errf("%s: the source must be a .rb file", source);
+
+	struct seam_input *in = NULL;
+	err_t gerr = NULL;
+	int frefused = 0;
+	if (seam) {
+		char *bc = NULL;
+		if (*verified)
+			bc = verified;
+		else if ((e = unverified_commit(c, &bc)))
+			return e;
+		gerr = read_seam(c->seam_emit, c->seam_inspect, abs, name, bc, &in, &frefused);
+	} else {
+		char *work = work_dir(c->repo, abs, "work");
+		*work_out = work;
+		if ((e = remove_all(work)))
+			return e;
+		char *scratch = fp_join(c->repo, xasprintf("build/tmp/c-driver/%s", fp_base(work))); /* per source, as the work dir */
+		*scratch_out = scratch;
+		char *E = fp_join(scratch, "E"), *I = fp_join(scratch, "I");
+		if ((e = remove_all(scratch)) || (e = mkdir_all(E)) || (e = mkdir_all(I)))
+			return e;
+		char *text = NULL;
+		int rc = c_frontend_generate(c->repo, c->spinel, E, I, work, abs, &text);
+		if (rc == 0 || rc == 1) {
+			/* on the reuse path Go checks neither the compiler nor the module, so the frontend's pin is not compared */
+			gerr = read_seam(E, I, abs, name, *verified ? verified : NULL, &in, &frefused);
+			/* the Go driver has no such stop: an output of the subprocess that does not read, or that disagrees with its exit
+			 * code, is named as the frontend's */
+			if (gerr)
+				gerr = errf("frontend: the C frontend returned %d, but its output does not read: %s", rc, gerr);
+			else if (frefused != (rc == 1))
+				gerr = errf("frontend: the C frontend returned %d, but its manifest says result.rc %d", rc, frefused);
+		} else {
+			/* rc 3: Go's error, printed as "spinelbpf: <text>"; rc 5: the SB017 refusal, printed as is. The domain the
+			 * frontend made before either is written first. */
+			char *dp = fp_join(I, xasprintf("%s.domain.json", name)), *d;
+			size_t dl;
+			r->has_output = rc >= 3 && read_file(dp, &d, &dl) == NULL;
+			if (r->has_output) {
+				r->domain = d;
+				r->domain_len = dl;
+				if ((e = write_out(r, dir, xasprintf("%s.domain.json", name), d, dl)))
+					return e;
+			}
+			if (rc == 5) {
+				r->refusal_text = text;
+				*refused = 1;
+				return NULL;
+			}
+			return text;
+		}
+	}
+	if (in) {
+		r->has_output = 1;
+		r->domain = in->domain;
+		r->domain_len = in->domain_len;
+		for (size_t i = 0; i < in->diags.n; i++)
+			diags_push(&r->diags, in->diags.v[i]);
+		if (in->domain && (e = write_out(r, dir, xasprintf("%s.domain.json", name), in->domain, in->domain_len)))
+			return e;
+	}
+	if (gerr)
+		return gerr;
+	if (frefused) {
+		for (size_t i = 0; i < in->diags.n; i++)
+			diags_push(refusal, in->diags.v[i]);
+		*refused = 1;
+		return NULL;
+	}
+	if (!compile) {
+		if ((e = reuse_committed(r, dir, name, in)) || !seam)
+			return e;
+		return write_out(r, dir, xasprintf("%s.inspect-manifest.json", name), in->manifest, in->manifest_len);
+	}
+	if ((e = write_out(r, dir, xasprintf("%s.mlir", name), in->mlir, in->mlir_len)) ||
+	    (e = write_out(r, dir, xasprintf("%s.schema.json", name), in->schema, in->schema_len)) ||
+	    (e = write_out(r, dir, xasprintf("%s.maps.json", name), in->maps, in->maps_len)))
+		return e;
+	char *schema_name = xasprintf("%s.schema.json", name);
+	char *sc_argv[] = {c->schema_check, schema_name, NULL};
+	if ((e = run_in(dir, sc_argv)))
+		return errf("ebpf-schema-check refused the generated schema: %s", e);
+	char *cstderr = NULL;
+	if ((e = compile_elf(c, dir, name, &cstderr, refused, refusal)) || *refused)
+		return e;
+	if ((e = write_out(r, dir, xasprintf("%s.compile_warnings.txt", name), cstderr, strlen(cstderr))))
+		return e;
+	if ((e = add_compile_warnings(&r->diags, "", cstderr)))
+		return e;
+	char *elf_path = fp_join(dir, xasprintf("%s.bpf.o", name));
+	strv_push(&r->files, elf_path);
+	if ((e = check_map_symbols(elf_path, in->schema, in->schema_len)))
+		return e;
+	char *elf;
+	size_t elf_len;
+	if ((e = read_file(elf_path, &elf, &elf_len)))
+		return e;
+	struct diags up = {0};
+	if ((e = uprobe_build_check(elf, elf_len, in->uprobes, in->n_uprobes, &up)))
+		return e;
+	if (up.n > 0) {
+		for (size_t i = 0; i < up.n; i++)
+			diags_push(refusal, up.v[i]);
+		*refused = 1;
+		return NULL;
+	}
+	char sha[65];
+	if ((e = check_schema_sha(elf_path, in->schema, in->schema_len, sha)))
+		return e;
+	if ((e = check_records_table(in->schema, in->schema_len, in->records)))
+		return e;
+	char *asmtext = embed_asm(xasprintf("%s.bpf.o", name), sha, xasprintf("%s.maps.json", name), in->records);
+	if ((e = write_out(r, dir, xasprintf("%s_embed.S", name), asmtext, strlen(asmtext))))
+		return e;
+	char *es = xasprintf("%s_embed.S", name), *eo = xasprintf("%s_embed.o", name);
+	char *cl_argv[] = {c->clang, "-c", "-x", "assembler", es, "-o", eo, NULL};
+	if ((e = run_in(dir, cl_argv)))
+		return errf("assembling the ELF embedding: %s", e);
+	strv_push(&r->files, fp_join(dir, eo));
+	if (seam)
+		return write_out(r, dir, xasprintf("%s.inspect-manifest.json", name), in->manifest, in->manifest_len);
+	return NULL;
+}
+
+err_t build(const struct config *c, const char *source, struct build_result *r, int *refused, struct diags *refusal)
+{
+	memset(r, 0, sizeof *r);
+	*refused = 0;
+	char *work = NULL, *scratch = NULL;
+	err_t e = build_inner(c, source, r, refused, refusal, &work, &scratch);
+	/* on success the work directory goes (SPINELBPF_KEEP_WORK=1 keeps it); the E/I scratch follows the same rule */
+	if (!e && !*refused) {
+		const char *keep = getenv("SPINELBPF_KEEP_WORK");
+		if (!(keep && !strcmp(keep, "1"))) {
+			if (work && (e = remove_all(work)))
+				return e;
+			if (scratch && (e = remove_all(scratch)))
+				return e;
+		}
+	}
+	return e;
+}
+
+/* ---- Link ---- */
+
+err_t link_exe(const struct config *c, const char *source, const char *exe)
+{
+	char *abs, *out_abs;
+	err_t e;
+	if ((e = fp_abs(source, &abs)) || (e = fp_abs(exe, &out_abs)))
+		return e;
+	char *dir = fp_dir(abs), *base = fp_base(abs);
+	size_t bl = strlen(base);
+	char *name = bl >= 3 && !strcmp(base + bl - 3, ".rb") ? xstrndup(base, bl - 3) : xstrdup(base);
+	char err[4096];
+	/* replaces checkBMLVersions: the facts of the libbml.a linked into this driver */
+	if (pin_check_bml(c->repo, err, sizeof err))
+		return errf("%s", err);
+	static const char *const archives[] = {"libbml_spinel.a", "libbml.a", "libbpf.a", "libelf.a", "libz.a"};
+	struct strv argv = {0};
+	strv_push(&argv, c->spinel);
+	strv_push(&argv, "-I");
+	strv_push(&argv, fp_join(c->repo, "ruby/lib"));
+	strv_push(&argv, base);
+	strv_push(&argv, "-o");
+	strv_push(&argv, out_abs);
+	for (size_t i = 0; i < 5; i++) {
+		char *p = fp_join(c->loader_libs, archives[i]);
+		if (!path_exists(p))
+			return errf("the C loader archive %s is missing — run scripts/setup.sh (or set SPINELBPF_LOADER_LIBS)", p);
+		strv_push(&argv, "--link");
+		strv_push(&argv, p);
+	}
+	strv_push(&argv, "--link");
+	strv_push(&argv, fp_join(dir, xasprintf("%s_embed.o", name)));
+	strv_push(&argv, NULL);
+	char *tmp = fp_join(c->repo, "build/tmp");
+	if ((e = mkdir_all(tmp)))
+		return e;
+	char *env[] = {xasprintf("TMPDIR=%s", tmp), NULL};
+	struct run_out o = {0};
+	if ((e = run_cmd(argv.v, dir, env, 1, &o)))
+		return errf("linking with spinel: %s\n%s", e, o.out.p ? o.out.p : "");
+	return check_needed(out_abs, fp_join(c->repo, "packaging/needed.allow"));
+}

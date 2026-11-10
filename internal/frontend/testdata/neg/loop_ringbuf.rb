@@ -5,7 +5,7 @@ BPF.record(Ev, n: :u32, _pad0: :u32)
 Events = BPF::RingBuf.new("Events", Ev.new(0, 0), 4096)
 Drops = BPF::ArrayMap.new("Drops", :u64, 2)
 
-
+# Ring buffer output in the body (an ebpf.loop body cannot hold ring buffer ops)
 def prog(ctx)
   4.times do |i|
     unless Events.output(Ev.new(i, 0))

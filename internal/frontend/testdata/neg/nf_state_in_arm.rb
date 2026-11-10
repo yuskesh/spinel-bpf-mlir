@@ -1,6 +1,6 @@
 require "bpf"
 
-
+# Binds ctx.state inside an arm (only a statement directly in the program body is accepted)
 State = Struct.new(:hook, :pf)
 BPF.kernel_type(State, "nf_hook_state", hook: :u8, pf: :u8)
 StateT = BPF::KernelType.new(State.new(0, 0))

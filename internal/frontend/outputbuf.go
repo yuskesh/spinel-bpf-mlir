@@ -2,10 +2,18 @@ package frontend
 
 import "fmt"
 
+// user buffer: `params: {n => :user_buf}` (uprobe) and
+// `r = R.output_buf(S.new(…), :data, ctx.buf_arg(n), <len>, :status, :count)` — writes the value into the reservation, then writes
+// n = max(0, min(len, N)) bytes of the user buffer into data (a [:u8, N] member — zeroed as a whole first), the raw status of
+// probe_read_user into status (:i64) and the clamped length into count (:i32 — not the number of bytes actually read), and submits
+// (ebpf.user.read). The result is the same as output_str's (OutputStr — `if r`).
+
+// outputBufForm is the text of the output_buf shape (the fix shown in error messages).
 func outputBufForm(param string) string {
 	return fmt.Sprintf("`r = R.output_buf(S.new(…), :<u8 array member>, %s.buf_arg(n), <length>, :<i64 status member>, :<i32 count member>)` then `if r`, or `_ = R.output_buf(…)`", param)
 }
 
+// outputBuf checks `R.output_buf(…)` — Stmt "ostr" (Buf). The binding of the result is checked by outputStrCheck (as for output_str).
 func (c *progCtx) outputBuf(call *Node, name, refVar string) (Stmt, bool) {
 	r := c.ringOf(c.a.ref(call, "receiver"))
 	if c.prog.Kind != "uprobe" {

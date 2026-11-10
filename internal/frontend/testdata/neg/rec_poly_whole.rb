@@ -1,6 +1,6 @@
 require "bpf"
 
-
+# A whole record value, not a member (poly), as an operator receiver — predicted SB004, but the p.load read-shape check's SB005 comes first (same before and after the fix)
 Stat = Struct.new(:hits, :bytes)
 BPF.record(Stat, hits: :u32, bytes: :u32)
 Stats = BPF::RecordMap.new("Stats", Stat.new(0, 0), 2)

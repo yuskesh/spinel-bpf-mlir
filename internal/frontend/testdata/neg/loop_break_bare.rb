@@ -2,7 +2,7 @@ require "bpf"
 
 Out = BPF::ArrayMap.new("Out", :i64, 4)
 
-
+# An unconditional break directly in the body (the code after it is dead)
 def prog(ctx)
   s = 0
   4.times do |i|

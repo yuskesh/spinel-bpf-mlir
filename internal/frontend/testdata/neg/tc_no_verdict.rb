@@ -1,6 +1,6 @@
 require "bpf"
 
-
+# A sched_cls program that does not end in a verdict
 Counts = BPF::ArrayMap.new("Counts", :u64, 2)
 
 def p(skb)

@@ -1,7 +1,7 @@
 require "bpf"
 
-
-
+# Record members whose names clash with builtin methods (b, bytes, first: String#b / String#bytes / Array#first) as operator receivers.
+# Two record types (so RecordRef#load is poly, the isolated condition). The frontend accepts the boxed dispatch only when syntax and declarations show the receiver is a record member read
 N = Struct.new(:b, :bytes, :first)
 BPF.record(N, b: :u32, bytes: :u32, first: :u32)
 Stat = Struct.new(:hits, :bytes)

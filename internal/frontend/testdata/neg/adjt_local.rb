@@ -1,6 +1,6 @@
 require "bpf"
 
-
+# The adjust_tail delta is not a literal (a local)
 Out = BPF::ArrayMap.new("Out", :i64, 1)
 
 def p(ctx)

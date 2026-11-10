@@ -1,6 +1,6 @@
 require "bpf"
 
-
+# Three guards (all DROP) nested three deep, and a loop after the last guard
 Hist = Struct.new(:hist, :n)
 BPF.record(Hist, hist: [:u32, 8], n: :u64)
 Hs = BPF::RecordMap.new("Hs", Hist.new(Array.new(8, 0), 0), 1)

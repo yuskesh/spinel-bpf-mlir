@@ -6,17 +6,27 @@ import (
 	"strings"
 )
 
-const maxLoopCount = 64
+// Bounded loops: the block of `N.times` / `k.times` / `(0...k).each` / `(0..m).each` becomes an ebpf.loop with (U) expansion
+// (fully unrolled). N is a literal, or the upper end of the interval of the run-time count (≤ 64). The run-time count is
+// bound(%k') — when the interval's lower end is negative, k' = k < 0 ? 0 : k is made explicit (leaving it to the unsigned
+// min(n, N) would turn −1 into N iterations). break / next are allowed only as the last statement of an if / unless / present arm.
+// Because the loop is (U), intervals are found by analysing the body N times in order and joining (i is [j, j] in each copy —
+// no fixed point or widening is needed).
 
+const maxLoopCount = 64 // the upper limit of N in bpf-mlir's ebpf.loop (also for the product of nested loops)
+
+// loopFrame is one level of loop under analysis — the environments at break / next (joined after the loop and into the next iteration).
 type loopFrame struct {
 	n      int64
 	breaks []map[string]*varInfo
 	nexts  []map[string]*varInfo
 }
 
+// iterNames are the iteration methods that take a block (only the times and each forms are accepted — the others are named by SB030).
 var iterNames = map[string]bool{"times": true, "each": true, "upto": true, "downto": true, "step": true, "each_with_index": true,
 	"each_with_object": true, "map": true, "select": true, "reject": true, "each_slice": true, "each_cons": true, "reverse_each": true, "loop": true}
 
+// isIterCall reports whether n is an iteration call with a block.
 func (c *progCtx) isIterCall(n *Node) bool {
 	if n == nil || n.Type != "CallNode" || !iterNames[n.Str["name"]] {
 		return false
@@ -27,6 +37,7 @@ func (c *progCtx) isIterCall(n *Node) bool {
 
 const loopForms = "`N.times do |i| … end`, `k.times`, `(0...k).each` or `(0..m).each`"
 
+// rangeRecv reads a `(lo...hi)` / `(lo..hi)` receiver (one RangeNode inside parentheses).
 func (c *progCtx) rangeRecv(recv *Node) (lo, hi *Node, incl, ok bool) {
 	if recv == nil || recv.Type != "ParenthesesNode" {
 		return nil, nil, false, false
@@ -39,9 +50,10 @@ func (c *progCtx) rangeRecv(recv *Node) (lo, hi *Node, incl, ok bool) {
 	if r.Type != "RangeNode" {
 		return nil, nil, false, false
 	}
-	return c.a.ref(r, "left"), c.a.ref(r, "right"), r.Int["flags"]&4 == 0, true
+	return c.a.ref(r, "left"), c.a.ref(r, "right"), r.Int["flags"]&4 == 0, true // RangeFlags::EXCLUDE_END = 4
 }
 
+// blockParam reads the block's parameter (none, or one required parameter).
 func (c *progCtx) blockParam(blk *Node) (string, bool) {
 	bp := c.a.ref(blk, "parameters")
 	if bp == nil {
@@ -66,6 +78,7 @@ func (c *progCtx) blockParam(blk *Node) (string, bool) {
 	return req[0].Str["name"], true
 }
 
+// writesIn returns the names of the locals assigned under node.
 func writesIn(a *AST, n *Node) map[string]*Node {
 	out := map[string]*Node{}
 	walk(a, n, func(x *Node) bool {
@@ -80,6 +93,7 @@ func writesIn(a *AST, n *Node) map[string]*Node {
 	return out
 }
 
+// loopStmt handles an iteration statement with a block.
 func (c *progCtx) loopStmt(n *Node) (Stmt, bool) {
 	name, recv, blk := n.Str["name"], c.a.ref(n, "receiver"), c.a.ref(n, "block")
 	if name == "loop" && recv == nil {
@@ -127,6 +141,7 @@ func (c *progCtx) loopStmt(n *Node) (Stmt, bool) {
 		return Stmt{}, false
 	}
 
+	// the count: a literal or the upper end of the interval
 	var bound *Expr
 	var nCount int64
 	clamp := false
@@ -181,6 +196,7 @@ func (c *progCtx) loopStmt(n *Node) (Stmt, bool) {
 		return Stmt{}, false
 	}
 
+	// outer locals assigned in the body (iter_args) — a bool cannot be an ebpf.loop iter_arg (integers only)
 	pre := c.env
 	var carried []string
 	for w, wn := range writesIn(c.a, body) {
@@ -194,20 +210,22 @@ func (c *progCtx) loopStmt(n *Node) (Stmt, bool) {
 	}
 	sort.Strings(carried)
 
+	// the in-order (U) analysis (its diagnostics and bindings are thrown away) — each iteration's entry and exit environments
 	entry := copyEnv(pre)
 	var entries, exits []map[string]*varInfo
 	snap := c.save()
 	for j := int64(0); j < nCount; j++ {
 		entries = append(entries, entry)
 		if bound != nil {
-			exits = append(exits, entry)
+			exits = append(exits, entry) // the run-time count is 0 to N
 		}
 		_, end, brks := c.loopBody(bodyN, entry, ivName, point(big.NewInt(j)), nCount)
 		c.restore(snap)
 		exits = append(exits, brks...)
 		entry = keepKeys(end, pre)
 	}
-	exits = append(exits, entry)
+	exits = append(exits, entry) // after N iterations (before the loop when N = 0)
+	// the real analysis: the entry is the join of every iteration's entry (i is [0, N−1])
 	all := copyEnv(pre)
 	if len(entries) > 0 {
 		all = entries[0]
@@ -233,6 +251,8 @@ func (c *progCtx) loopStmt(n *Node) (Stmt, bool) {
 	return Stmt{Kind: "loop", Count: nCount, Bound: bound, Clamp: clamp, Incl: incl && bound != nil, Var: ivName, Carried: carried, Then: ss, Pos: c.z.pos(c.a, n)}, true
 }
 
+// loopBody analyses the body once in the entry environment and returns the statements, the join at the body's end (and at next),
+// and the environments at break.
 func (c *progCtx) loopBody(body []*Node, entry map[string]*varInfo, ivName string, iv Ival, n int64) ([]Stmt, map[string]*varInfo, []map[string]*varInfo) {
 	c.env = copyEnv(entry)
 	if ivName != "" {
@@ -252,6 +272,7 @@ func (c *progCtx) loopBody(body []*Node, entry map[string]*varInfo, ivName strin
 	return ss, end, f.breaks
 }
 
+// keepKeys keeps only the names of e that are in pre (the block's locals and i do not leave the loop).
 func keepKeys(e, pre map[string]*varInfo) map[string]*varInfo {
 	out := map[string]*varInfo{}
 	for k, v := range e {
@@ -260,7 +281,7 @@ func keepKeys(e, pre map[string]*varInfo) map[string]*varInfo {
 			out[k] = &vv
 		}
 	}
-	for k, v := range pre {
+	for k, v := range pre { // an assignment rejected in the body — keep the previous value (the real analysis reports the diagnostic)
 		if _, ok := out[k]; !ok {
 			vv := *v
 			out[k] = &vv
@@ -269,6 +290,8 @@ func keepKeys(e, pre map[string]*varInfo) map[string]*varInfo {
 	return out
 }
 
+// loopBodyAllowed reports, before the analysis, the first form that cannot be placed in the body (bpf-mlir's constraints on an
+// ebpf.loop body, reported early and with a position).
 func (c *progCtx) loopBodyAllowed(blk *Node, ivName string) bool {
 	if ivName != "" {
 		if _, had := c.env[ivName]; had || ivName == c.param || c.refs[ivName] != nil || c.wins[ivName] != nil {
@@ -282,7 +305,7 @@ func (c *progCtx) loopBodyAllowed(blk *Node, ivName string) bool {
 			return false
 		}
 		switch {
-		case x.Type == "LocalVariableReadNode" && c.kptrs[x.Str["name"]] != nil:
+		case x.Type == "LocalVariableReadNode" && c.kptrs[x.Str["name"]] != nil: // a kernel pointer
 			c.add(Rejected, SB030LoopShape, x, "the kernel pointer `%s` is not read inside a loop body (bpf-mlir's ebpf.loop body has no CO-RE read) — read the members before the loop", x.Str["name"])
 			ok = false
 		case x.Type == "LocalVariableReadNode" && (c.refs[x.Str["name"]] != nil || c.wins[x.Str["name"]] != nil):
@@ -291,19 +314,21 @@ func (c *progCtx) loopBodyAllowed(blk *Node, ivName string) bool {
 		case ivName != "" && strings.HasPrefix(x.Type, "LocalVariable") && strings.HasSuffix(x.Type, "WriteNode") && x.Str["name"] == ivName:
 			c.add(Rejected, SB030LoopShape, x, "the loop index `%s` is not assigned inside the body (Ruby rebinds it every iteration; the unrolled copies fix it) — use another local", ivName)
 			ok = false
-		case c.z.userCall(c.a, x) != nil && c.ringPath(c.z.userCall(c.a, x), map[string]bool{}) != nil:
+		case c.z.userCall(c.a, x) != nil && c.ringPath(c.z.userCall(c.a, x), map[string]bool{}) != nil: // a call inside the loop that reaches a ring buffer (bpf-mlir's call-graph pass rejects a ring buffer reached from a callee called inside a loop)
 			c.add(Rejected, SB030LoopShape, x, "`%s` is called inside a loop and reaches a ring buffer output (%s) — bpf-mlir's ebpf.loop body cannot reach a ring buffer op through a call; output after the loop", x.Str["name"], strings.Join(c.ringPath(c.z.userCall(c.a, x), map[string]bool{}), " → "))
 			ok = false
 		case c.isOutput(x) || c.isOutputStr(x):
 			c.add(Rejected, SB030LoopShape, x, "a ring buffer `%s` is not accepted inside a loop (bpf-mlir's ebpf.loop body has no ring buffer op) — count in the loop and output after it", x.Str["name"])
 			ok = false
 		case x.Type == "BlockNode" && x != blk:
+			// the block of a nested loop — the same rules apply inside it (keep walking)
 		}
 		return ok
 	})
 	return ok
 }
 
+// escape handles a break / next statement (only as the last statement of an if / unless / present arm).
 func (c *progCtx) escape(n *Node, last bool) (Stmt, bool) {
 	kw := map[string]string{"BreakNode": "break", "NextNode": "next"}[n.Type]
 	switch {
@@ -332,10 +357,13 @@ func (c *progCtx) escape(n *Node, last bool) (Stmt, bool) {
 	return Stmt{Kind: kw, Pos: c.z.pos(c.a, n)}, true
 }
 
+// escapes reports whether a statement list ends in break / next (such an arm does not join).
 func escapes(ss []Stmt) bool {
 	return len(ss) > 0 && (ss[len(ss)-1].Kind == "break" || ss[len(ss)-1].Kind == "next")
 }
 
+// ctxSnapshot is the state before the in-order (U) analysis (used to undo the analysis's side effects — diagnostics, bindings and
+// rejected names).
 type ctxSnapshot struct {
 	diags                                     int
 	refs                                      map[string]*Node

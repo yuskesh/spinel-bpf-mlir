@@ -1,6 +1,6 @@
 require "bpf"
 
-
+# A mark write inside an expression (statement only)
 Out = BPF::ArrayMap.new("Out", :u32, 1)
 
 def p(skb)

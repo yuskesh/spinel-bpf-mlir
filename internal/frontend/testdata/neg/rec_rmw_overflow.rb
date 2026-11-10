@@ -1,6 +1,6 @@
 require "bpf"
 
-
+# Overflowing + 1 in the value of a read-modify-write of the same record map entry (u64 member) — before the fix SB014 hid the RMW
 S = Struct.new(:a, :b)
 BPF.record(S, a: :u64, b: :u64)
 R = BPF::RecordMap.new("R", S.new(0, 0), 2)

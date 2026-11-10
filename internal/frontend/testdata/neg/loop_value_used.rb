@@ -2,7 +2,7 @@ require "bpf"
 
 Out = BPF::ArrayMap.new("Out", :i64, 4)
 
-
+# Uses the value of times (as a receiver or a break value — Spinel types it poly)
 def prog(ctx)
   s = 0
   r = 4.times do |i|

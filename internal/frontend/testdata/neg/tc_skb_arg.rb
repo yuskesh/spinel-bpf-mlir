@@ -1,6 +1,6 @@
 require "bpf"
 
-
+# Tracing API on the skb context (same diagnostic as xdp_ctx_arg.rb)
 Counts = BPF::ArrayMap.new("Counts", :u64, 2)
 
 def p(skb)

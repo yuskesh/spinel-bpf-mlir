@@ -1,8 +1,8 @@
 require "bpf"
 
-
-
-
+# raw_tp: sys_enter's args[1] (the syscall number) and args[0] (the raw value of struct pt_regs *), only for the Filter tgid:
+# if the number's low 32 bits are 110 (getppid) add 1 to Seen[0]; if it is 1_000_000 or more (no real syscall has it; only the test run's synthetic call)
+# Seen[1] = args[1] (the u64 as is), Seen[2] = args[0]'s low 32 bits, add args[0]'s high 32 bits to Seen[3] (the same args as bpf-mlir's own raw_tp test)
 Filter = BPF::ArrayMap.new("Filter", :u32, 1)
 Seen = BPF::ArrayMap.new("Seen", :u64, 4)
 

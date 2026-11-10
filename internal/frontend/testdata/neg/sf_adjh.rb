@@ -1,6 +1,6 @@
 require "bpf"
 
-
+# adjust_head on the socket_filter context
 Out = BPF::ArrayMap.new("Out", :i64, 1)
 
 def p(skb)

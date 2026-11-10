@@ -2,6 +2,20 @@ package frontend
 
 import "math/big"
 
+// Narrowing intervals by conditions: at the entry of an if / unless arm, the comparison in the condition intersects the
+// intervals of locals.
+// - `x op y` (op is < <= > >= ==, and x or y is a read of a local — the other side is a literal, a local or any other expression,
+//   whose interval is used as the bound); != does not narrow
+// - in the true arm of && both sides narrow; the false arm does not narrow. || does not narrow. not swaps true and false
+// - an arm whose intersection is empty is not narrowed (it keeps the original intervals — errors inside an unreachable arm are
+//   still rejected as before)
+// - at a join the intervals are united by the existing joinEnv; a reassignment inside an arm gives a new interval (the narrowing
+//   no longer applies)
+// Lowering does not change — the kernel-side checks (the ref.index comparison, the min of a loop bound) stay in the ELF whatever
+// the narrowing says.
+
+// narrowEnv applies the narrowing of cond (positive: the true arm) to a copy of env. If an interval would become empty it returns
+// an unnarrowed copy.
 func narrowEnv(env map[string]*varInfo, cond *Expr, positive bool) map[string]*varInfo {
 	out := copyEnv(env)
 	if cond == nil || !narrowInto(out, cond, positive) {
@@ -10,13 +24,14 @@ func narrowEnv(env map[string]*varInfo, cond *Expr, positive bool) map[string]*v
 	return out
 }
 
+// narrowInto narrows env (false if an interval becomes empty).
 func narrowInto(env map[string]*varInfo, e *Expr, pos bool) bool {
 	switch e.Kind {
 	case "not":
 		return narrowInto(env, e.Args[0], !pos)
 	case "and":
 		if !pos {
-			return true
+			return true // !(a && b) does not narrow
 		}
 		return narrowInto(env, e.Args[0], true) && narrowInto(env, e.Args[1], true)
 	case "cmp":
@@ -29,6 +44,7 @@ func narrowInto(env map[string]*varInfo, e *Expr, pos bool) bool {
 	return true
 }
 
+// side returns the interval of one side of a comparison and, if that side is a read of a local, its name.
 func side(env map[string]*varInfo, x *Expr) (Ival, string, bool) {
 	if x.Bool || x.Wide {
 		return Ival{}, "", false
@@ -59,6 +75,7 @@ func bigMax(a, b *big.Int) *big.Int {
 	return b
 }
 
+// narrowCmp writes the intervals that hold when `l op r` is true into the local side(s).
 func narrowCmp(env map[string]*varInfo, l *Expr, op string, r *Expr) bool {
 	L, ln, ok1 := side(env, l)
 	R, rn, ok2 := side(env, r)
@@ -68,7 +85,7 @@ func narrowCmp(env map[string]*varInfo, l *Expr, op string, r *Expr) bool {
 	one := big.NewInt(1)
 	nl, nr := L, R
 	switch op {
-	case "<":
+	case "<": // hi(l) ≤ hi(r) − 1, lo(r) ≥ lo(l) + 1
 		nl = Ival{L.Lo, bigMin(L.Hi, new(big.Int).Sub(R.Hi, one))}
 		nr = Ival{bigMax(R.Lo, new(big.Int).Add(L.Lo, one)), R.Hi}
 	case "<=":

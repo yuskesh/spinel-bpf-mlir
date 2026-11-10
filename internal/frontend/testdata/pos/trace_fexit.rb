@@ -1,6 +1,6 @@
 require "bpf"
 
-
+# fexit: counts by the sign of the return value (bpf_fentry_test1 returns int and takes one argument)
 Filter = BPF::ArrayMap.new("Filter", :u32, 1)
 Rets = BPF::ArrayMap.new("Rets", :u64, 3)
 

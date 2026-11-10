@@ -1,7 +1,7 @@
 require "bpf"
 
-
-
+# netfilter: reads bpf_nf_ctx's state (nf_hook_state's hook and pf) and skb (sk_buff's len) via CO-RE into Out[0..2], the run count into Out[3],
+# drop when len exceeds 64 (guard), accept otherwise
 NfState = Struct.new(:hook, :pf)
 BPF.kernel_type(NfState, "nf_hook_state", hook: :u8, pf: :u8)
 StateT = BPF::KernelType.new(NfState.new(0, 0))

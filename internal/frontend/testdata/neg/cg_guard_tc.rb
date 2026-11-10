@@ -1,6 +1,6 @@
 require "bpf"
 
-
+# A cgroup_skb guard returns a sched_cls verdict
 def p(skb)
   n = skb.len
   return BPF::TC_DROP if n > 64

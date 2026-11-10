@@ -1,6 +1,6 @@
 require "bpf"
 
-
+# check on the netfilter context (it has no packet window)
 Out = BPF::ArrayMap.new("Out", :u32, 1)
 
 def p(ctx)

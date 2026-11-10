@@ -1,6 +1,6 @@
 require "bpf"
 
-
+# Range narrowing by conditions: inside if / unless branches a comparison narrows a local's range (index, loop N and clamp, overflow, negation, local vs local)
 Hist = Struct.new(:hist, :n)
 BPF.record(Hist, hist: [:u32, 8], n: :u64)
 Hs = BPF::RecordMap.new("Hs", Hist.new(Array.new(8, 0), 0), 1)

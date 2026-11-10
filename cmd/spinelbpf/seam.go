@@ -17,6 +17,14 @@ import (
 	"github.com/yuskesh/spinel-bpf-mlir/internal/frontend"
 )
 
+// The driver seam: an opt-in entry (`--seam-emit E --seam-inspect I`) that takes the outputs of the spinel-mlir consumer
+// (the 5 files in the E dir, and the domain and the inspection manifest v1 in the I dir) instead of running the Go
+// frontend (frontend.Generate). It reads the manifest first, checks the input .rb's sha256, the stem, the bpf-mlir pin
+// and the sha256 of every byte of each listed output, and stops on a mismatch with it named.
+// The rest of the path (schema-check, ebpf-compile, SB021, the checks, embedding, link) goes through the same functions
+// as the Go path.
+
+// seamOutputs lists the keys of the manifest's outputs, with each file's dir (E or I) and extension.
 var seamOutputs = []struct{ key, dir, ext string }{
 	{"mlir", "E", ".mlir"}, {"schema", "E", ".schema.json"}, {"maps", "E", ".maps.json"},
 	{"records", "E", ".records.txt"}, {"uprobe_targets", "E", ".uprobe_targets.json"}, {"domain", "I", ".domain.json"},
@@ -30,6 +38,8 @@ type seamFile struct {
 	SHA256 string `json:"sha256"`
 }
 
+// seamManifest is the inspection manifest v1, the contract fixed by spinel-mlir's consumer (with its publish order and
+// the producer metadata used when there are no facts).
 type seamManifest struct {
 	Version   int       `json:"version"`
 	Source    seamFile  `json:"source"`
@@ -58,6 +68,7 @@ type seamManifest struct {
 	Outputs map[string]seamFile `json:"outputs"`
 }
 
+// seamTargets is <stem>.uprobe_targets.json in the E dir (version 1).
 type seamTargets struct {
 	Version  int `json:"version"`
 	Programs []struct {
@@ -72,17 +83,24 @@ type seamTargets struct {
 	} `json:"programs"`
 }
 
+// seamInput is the checked seam input — the Output (its Result holds only the domain's diagnostics) and the inputs of
+// the uprobe check.
 type seamInput struct {
-	Output   *frontend.Output
-	Files    map[string]string
-	Decl     map[string]frontend.Pos
+	Output *frontend.Output
+	Files  map[string]string
+	Decl   map[string]frontend.Pos
+	// Manifest is the bytes of the checked inspection manifest (the provenance record copied verbatim next to the
+	// artefacts on success)
 	Manifest []byte
 }
 
+// seamErr is a named seam error.
 func seamErr(format string, args ...any) error {
 	return fmt.Errorf("seam: "+format, args...)
 }
 
+// requireKeys checks that a JSON object's keys are exactly want (DecodeStrictJSON stops unknown keys but not missing
+// ones).
 func requireKeys(raw []byte, where string, want ...string) error {
 	var m map[string]json.RawMessage
 	if err := json.Unmarshal(raw, &m); err != nil {
@@ -101,6 +119,7 @@ func sha256Hex(b []byte) string {
 	return hex.EncodeToString(s[:])
 }
 
+// readSeamManifest reads the manifest strictly and checks its version, required keys and value shapes.
 func readSeamManifest(path string) (*seamManifest, []byte, error) {
 	b, err := os.ReadFile(path)
 	if err != nil {
@@ -170,6 +189,9 @@ func readSeamManifest(path string) (*seamManifest, []byte, error) {
 	return &m, b, nil
 }
 
+// bpfMLIRCommit is the driver's bpf-mlir commit — from ebpf-compile's --version (already checked), or, without
+// ebpf-compile, unverifiedBPFMLIRCommit (the development form uses the third_party/bpf-mlir gitlink, the public form the
+// source release's commit — seam_pin_{dev,public}.go).
 func bpfMLIRCommit(cfg Config, verified string) (string, error) {
 	if verified != "" {
 		return verified, nil
@@ -177,6 +199,8 @@ func bpfMLIRCommit(cfg Config, verified string) (string, error) {
 	return unverifiedBPFMLIRCommit(cfg)
 }
 
+// readSeam reads the seam's inputs, checking them. For an rc 1 manifest it returns an Output holding the domain, with a
+// *frontend.Error for the domain's diagnostics or a named error.
 func readSeam(cfg Config, abs, name, bpfCommit string) (*seamInput, error) {
 	m, mb, err := readSeamManifest(filepath.Join(cfg.SeamInspect, name+".inspect-manifest.json"))
 	if err != nil {
@@ -265,6 +289,8 @@ func readSeam(cfg Config, abs, name, bpfCommit string) (*seamInput, error) {
 	return in, nil
 }
 
+// seamUprobes reads uprobe_targets strictly and checks that it is the same set as the uprobe / uretprobe roots of the
+// domain (name, kind, declaration position).
 func seamUprobes(b []byte, roots []frontend.DomainRoot) (map[string]string, map[string]frontend.Pos, error) {
 	var t seamTargets
 	if err := requirements.DecodeStrictJSON(b, &t); err != nil {
@@ -302,6 +328,8 @@ func seamUprobes(b []byte, roots []frontend.DomainRoot) (map[string]string, map[
 	return files, decl, nil
 }
 
+// seamRecordsOK reports whether the records text uses only the characters of the embedded table (alphanumerics,
+// `_|=:;[]` and newline — an array element is `m[i]`); it rejects characters that would break the .asciz quoting (`"`, `\`).
 func seamRecordsOK(records string) bool {
 	return !bytes.ContainsFunc([]byte(records), func(r rune) bool {
 		return !(r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' || strings.ContainsRune("_|=:;[]\n", r))

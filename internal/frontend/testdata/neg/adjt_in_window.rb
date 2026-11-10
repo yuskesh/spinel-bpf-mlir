@@ -1,6 +1,6 @@
 require "bpf"
 
-
+# adjust_tail inside an if-w arm
 Out = BPF::ArrayMap.new("Out", :i64, 2)
 
 def p(ctx)

@@ -1,6 +1,6 @@
 require "bpf"
 
-
+# lpm_trie: longest match on the destination IPv4 (4 window bytes); presence is a local set inside the branch (a default value does not stand for "absent"); the value goes to Out
 Rules = BPF::LpmTrieMap.new("Rules", :u32, 64)
 Signed = BPF::LpmTrieMap.new("Signed", :i32, 8)
 Out = BPF::ArrayMap.new("Out", :i64, 4)

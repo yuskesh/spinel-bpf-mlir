@@ -1,9 +1,9 @@
 require "bpf"
 
-
-
-
-
+# The eBPF side — 3 programs (XDP, tcx ingress, tcx egress) count into one Counts map.
+# They classify the same way (the eBPF side cannot call your own defs, so it is written 3 times): 0 IPv4 (IHL 5) UDP, 1 ICMP echo request, 2 echo reply, 3 unreachable, 4 other (other IPv4, IPv6, ARP, short frames).
+# The slot is hook × 5 + kind (0-4 XDP, 5-9 tcx ingress, 10-14 tcx egress). XDP and tc write the same map, so atomic_add (a per-CPU write-back is allowed only when every program is XDP).
+# Every verdict is PASS (the programs only count).
 Counts = BPF::ArrayMap.new("Counts", :u64, 15)
 
 def tcc_xdp(ctx)
@@ -96,9 +96,9 @@ BPF.xdp :tcc_xdp
 BPF.tcx :tcc_in, :ingress
 BPF.tcx :tcc_out, :egress
 
-
-
-
+# The user-space side — plain Ruby (compiled by Spinel).
+#   tccount --iface IF [--duration-ms MS]   attach all 3 to IF, wait MS milliseconds, print the counts per hook × kind
+#   tccount --selftest                     without attaching, test-run the 3 programs on built frames (XDP and tc test runs)
 require "spinelbpf"
 
 USAGE = "usage: tccount --iface IF [--duration-ms MS] | --selftest"
@@ -127,7 +127,7 @@ if iface == "" && !selftest
   raise USAGE
 end
 
-
+# frame builds a 64-byte frame: the EtherType and, for IPv4, version / IHL 0x45, the protocol and the ICMP type.
 def frame(et, proto, icmp_type)
   f = Array.new(64, 0)
   f[12] = et >> 8

@@ -24,7 +24,7 @@ silently approximated. Release notes, limits and the reason code table are in
 
 - Linux x86_64. Kernel execution has been verified on Linux 7.1.8 only.
 - LLVM / MLIR 23.1.1 (default prefix `/opt/llvm-23.1.1`, override with `LLVM_PREFIX`)
-- Go 1.27 (the frontend and the build driver are written in Go)
+- A C compiler (gcc). Building needs no Go: `spinelbpf` is a C program. Go 1.27 is needed only to run the tests
 - gcc, make, CMake, Ninja, git, and network access for the submodules and Spinel's
   libprism
 - root, or the capabilities listed below, to load programs
@@ -35,7 +35,7 @@ silently approximated. Release notes, limits and the reason code table are in
 git clone --recurse-submodules https://github.com/yuskesh/spinel-bpf-mlir
 cd spinel-bpf-mlir
 scripts/setup.sh
-go build -o build/bin/spinelbpf ./cmd/spinelbpf
+scripts/build-c-driver.sh build/bin
 build/bin/spinelbpf --version
 ```
 

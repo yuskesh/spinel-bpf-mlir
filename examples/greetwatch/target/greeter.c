@@ -1,5 +1,5 @@
-
-
+// greeter: the uprobe target (C) of the greetwatch example. It prints "ready <pid>" first, then calls greet(name, count) for
+// each line of stdin and prints the reply (count is the line number, from 1); the line "(null)" calls greet(NULL, count).
 #include <inttypes.h>
 #include <stdint.h>
 #include <stdio.h>

@@ -1,6 +1,6 @@
 require "bpf"
 
-
+# netfilter returns an XDP verdict
 def p(ctx)
   BPF::XDP_PASS
 end

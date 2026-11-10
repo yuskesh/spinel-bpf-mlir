@@ -1,7 +1,7 @@
 require "bpf"
 
-
-
+# A three-level embedded path (bpf-mlir's limit): synthetic kernel structs (e154_outer > e154_mid > e154_inner). Compile and schema-check
+# only (the kernel has no such type: nothing is attached, the kfield check before load stops it). t.load.mid.inner.v into Out[0]
 Inner = Struct.new(:v)
 BPF.kernel_type(Inner, "e154_inner", v: :u32)
 Mid = Struct.new(:inner)

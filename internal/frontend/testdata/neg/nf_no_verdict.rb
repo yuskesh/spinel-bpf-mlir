@@ -1,6 +1,6 @@
 require "bpf"
 
-
+# A netfilter program that does not end in a verdict
 Out = BPF::ArrayMap.new("Out", :u32, 1)
 
 def p(ctx)

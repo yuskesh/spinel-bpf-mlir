@@ -1,8 +1,10 @@
 /build/
 *.bpf.o
+# The examples' generated ELFs are committed (so that a fresh clone builds without ebpf-compile)
 !examples/**/*.bpf.o
 .DS_Store
 ._*
 .claude/
+# Go c-archive outputs (build.sh makes them in build/tmp — do not commit ones made by hand in golib/)
 *.a
 **/golib/*.h

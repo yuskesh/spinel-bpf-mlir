@@ -1,6 +1,6 @@
 require "bpf"
 
-
+# Two nested loops (product of the N's is 64); the inner next belongs to the inner loop
 Out = BPF::ArrayMap.new("Out", :i64, 1)
 
 def prog(ctx)

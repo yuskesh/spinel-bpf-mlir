@@ -1,6 +1,6 @@
 require "bpf"
 
-
+# break / next as the last statement of an if / unless branch; a times loop containing break is accepted in statement position (Spinel types it as poly)
 Out = BPF::ArrayMap.new("Out", :i64, 4)
 
 def prog(ctx)

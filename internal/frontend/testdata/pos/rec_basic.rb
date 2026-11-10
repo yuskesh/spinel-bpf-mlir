@@ -1,6 +1,6 @@
 require "bpf"
 
-
+# Two record types: member reads and writes, atomic_add, update with record.make, a signed member, _pad
 Stat = Struct.new(:hits, :bytes, :last_len, :_pad0, :flags)
 BPF.record(Stat, hits: :u64, bytes: :u64, last_len: :u16, _pad0: :u16, flags: :i32)
 Pair = Struct.new(:a, :b)

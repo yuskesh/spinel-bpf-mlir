@@ -1,16 +1,16 @@
-
-
-
-
-
-
+# bpf (the native twin) — a library implementing the eBPF-side API with Ruby arrays (the model for differential testing against the kernel).
+#
+# With the same names and shapes as ruby/lib/bpf.rb (BPF::ArrayMap, MapRef, XdpMd, XDP_*, BPF.xdp), it runs eBPF-side functions natively under Spinel.
+# Used only by test builds (`spinel -I ruby/lib/native` — never part of a user's executable). Value semantics follow a BPF array map:
+# a lookup with an out-of-range key is nil, atomic_add / update do nothing out of range, 32-bit values wrap per their type (u32 modulo 2^32, i32 signed).
+# When a 64-bit value overflows Integer, Spinel stops with RangeError (BPF wraps — the differential tables have no overflowing rows).
 module BPF
   XDP_ABORTED = 0
   XDP_DROP = 1
   XDP_PASS = 2
   XDP_TX = 3
 
-
+  # sched_cls (tcx) verdicts (the same values as ruby/lib/bpf.rb: TC_ACT_OK / TC_ACT_SHOT)
   TC_PASS = 0
   TC_DROP = 2
 
@@ -32,8 +32,8 @@ module BPF
   ENOMEM = -12
   EEXIST = -17
 
-
-
+  # The xdp context — holds the packet bytes (an Array of Integers, each 0..255). check is a hand-written model (differential runs against the kernel check it):
+  # a Window if [off, off + len) is inside bytes, otherwise nil.
   class XdpMd
     def initialize(bytes)
       @bytes = bytes
@@ -47,7 +47,7 @@ module BPF
       nil
     end
 
-
+    # ingress_ifindex — the value of the kernel's test run without a ctx (lo of the calling process's netns — 1). _h_ifx lets a harness mutation set the value
     def ingress_ifindex
       @ifx
     end
@@ -57,8 +57,8 @@ module BPF
       self
     end
 
-
-
+    # adjust_head — the range of the kernel's bpf_xdp_adjust_head: −22 if fewer than 14 bytes remain after shrinking; growing is bounded by the test run's headroom (the twin models 200 —
+    # the tables have only −100 and −1000, so the boundary is not checked); the grown head is 0 (the test run's headroom comes from kzalloc). A failed call leaves the packet unchanged
     def adjust_head(d)
       lim = 14
       if BPF::ADJH_BOUND[0] != 0
@@ -78,8 +78,8 @@ module BPF
       0
     end
 
-
-
+    # adjust_tail — the shrinking side of the kernel's bpf_xdp_adjust_tail: −22 if fewer than 14 bytes (n + k) remain (unchanged — the boundary uses the same mutation slot as ADJH_BOUND),
+    # otherwise drops the last −k bytes
     def adjust_tail(k)
       lim = 14
       if BPF::ADJH_BOUND[0] != 0
@@ -93,7 +93,7 @@ module BPF
     end
   end
 
-
+  # The sched_cls context — the same check model as XdpMd (skb data starts at the Ethernet header — differential runs against the kernel check it).
   class SkBuff
     def initialize(bytes)
       @bytes = bytes
@@ -107,7 +107,7 @@ module BPF
       nil
     end
 
-
+    # len and mark — len is the number of frame bytes (a tc skb starts at L2); mark starts at 0 and is written with mark= (as in the kernel's test run without a ctx)
     def len
       @bytes.length
     end
@@ -121,8 +121,8 @@ module BPF
     end
   end
 
-
-
+  # The cgroup_skb context — data starts at the network header: the packet is the test-run frame bytes from hdr on (the Ethernet 14 — the harness passes it),
+  # len is bytes.length − hdr (differential runs against the kernel check it).
   class CgroupSkb
     def initialize(bytes, hdr)
       @bytes = bytes
@@ -141,7 +141,7 @@ module BPF
     end
   end
 
-
+  # A checked window — reads index from the window start (the frontend has checked the range). be is network order, le little endian.
   class Window
     def initialize(bytes, off)
       @bytes = bytes
@@ -223,7 +223,7 @@ module BPF
       v
     end
 
-
+    # reset lets the twin harness set every slot to 0 (not part of the eBPF-side API).
     def reset
       i = 0
       while i < @max_entries
@@ -233,7 +233,7 @@ module BPF
       0
     end
 
-
+    # poke lets the twin harness place an input (not part of the eBPF-side API).
     def poke(key, value)
       @vals[key] = value
     end
@@ -259,14 +259,14 @@ module BPF
       nil
     end
 
-
+    # peek lets the twin harness read a map value (not part of the eBPF-side API).
     def peek(key)
       @vals[key]
     end
   end
 
-
-
+  # The devmap twin: a slot value is an ifindex (0 means no entry — the kernel rejects updates with ifindex 0). redirect gives, if the entry exists,
+  # XDP_REDIRECT (4 — the bpf_redirect_map helper's value, the test run's return value), otherwise the fallback verdict.
   class DevMap
     def initialize(name, value_type, max_entries)
       @name = name
@@ -312,8 +312,8 @@ module BPF
     end
   end
 
-
-
+  # The sockmap twin: a slot is the socket's protocol (17 UDP, 6 TCP — 0 means no entry). assign gives −2 with no entry (the frontend's sentinel),
+  # −91 on a protocol mismatch (−EPROTOTYPE — bpf_sk_lookup_assign), otherwise 0 (selected). The family is AF_INET only (the twin has no family)
   class SockMap
     def initialize(name, value_type, max_entries)
       @name = name
@@ -358,7 +358,7 @@ module BPF
     end
   end
 
-
+  # A synthetic sk_lookup context (protocol and local_port)
   class SkLookupCtx
     def initialize(protocol, local_port)
       @protocol = protocol
@@ -374,15 +374,15 @@ module BPF
     end
   end
 
-
-
+  # record: the declaration does nothing in the twin. A slot is an Array of the members' Integer values (not a Struct — with setters on a polymorphic Struct
+  # Spinel emits invalid C, seen in probes). Member reads and writes go through a view the harness generates per record (_h_view), additions through _h_radd (wrapping at the member width).
   def self.record(klass, fields)
     fields.length
   end
 
-
-
-
+  # ktime_ns is the fixed value 1 in the twin (time is outside the differential comparison; on the kernel only monotonicity is checked).
+# The global-variable twin: the harness's `config <Name> <v>` sets a value. Reading an unset required Config is an error (the kernel side fails the load with ConfigNotSet);
+# unset OptionalConfig and Counter read 0. Counter's add wraps at the declared width (32 bit — at 64 bit an overflow is Spinel's RangeError; the tables do not overflow)
 GLOBAL_NAMES = []
 GLOBAL_VALUES = []
 
@@ -466,15 +466,15 @@ end
     1
   end
 
-
-
+  # The tracing twin: contexts hold synthetic values the harness makes (fexit's return value, kprobe's register values — the harness truncates them to the declared type's width);
+  # pid_tgid is the value the harness's `task <v>` puts in TASK[0]
   TASK = [0]
 
   def self.pid_tgid
     TASK[0]
   end
 
-
+  # The twin's current task comm (16 bytes) — the harness's `comm <name>` sets it by the PR_SET_NAME rule (up to the first 15 bytes and a NUL, zeros after)
   TASK_COMM = Array.new(16, 0)
 
   def self.set_comm(s)
@@ -491,7 +491,7 @@ end
     0
   end
 
-
+  # The twin of an fentry with args holds kptrs (a KPtr or nil per declared struct argument) and idx (their numbers) — an fentry without args is FentryCtx.new
   class FentryCtx
     def initialize(kptrs = nil, idx = nil, ints = nil)
       @kptrs = kptrs
@@ -499,7 +499,7 @@ end
       @ints = ints
     end
 
-
+    # Integer arguments (12 slots the harness truncated to the declared widths)
     def arg(i)
       @ints[i]
     end
@@ -526,7 +526,7 @@ end
     end
   end
 
-
+  # The fmod_ret twin — integer arguments (12 slots the harness truncated to the declared widths)
   class FmodRetCtx
     def initialize(ints)
       @ints = ints
@@ -537,7 +537,7 @@ end
     end
   end
 
-
+  # The tp_btf twin: a kernel struct value is a Struct the harness makes (values the test knows — other members 0); KPtr wraps it
   class KernelType
     def initialize(sample)
       @sample = sample
@@ -548,7 +548,7 @@ end
     end
   end
 
-
+  # Pointer members: the harness sets a name and the target KPtr with set_ptr (an unset member is NULL — ptr gives nil)
   class KPtr
     def initialize(value)
       @value = value
@@ -561,7 +561,7 @@ end
       @addr = 0
     end
 
-
+    # The address of a checked kernel pointer (the harness sets it with set_addr — only the kernel knows the real value, so the twin uses the harness's value)
     def set_addr(a)
       @addr = a
     end
@@ -570,7 +570,7 @@ end
       @addr
     end
 
-
+    # Array members: the harness sets the bytes with set_arr, and copy returns a copy of them (t.copy(:m) — a fixed N bytes)
     def set_arr(field, a)
       @anames.push(field)
       @arrs.push(a)
@@ -593,7 +593,7 @@ end
       raise "twin: no array member #{field}"
     end
 
-
+    # The string behind a `:strptr` field — the harness sets the bytes with set_str (an unset field is the empty string)
     def set_str(field, a)
       @snames.push(field)
       @strs.push(a)
@@ -631,10 +631,10 @@ end
     end
   end
 
-
-
-
-
+  # kptrs are the KPtrs of the declared struct arguments, idx their argument numbers (in the same order as kptrs), ints the integer arguments (by number — truncated to the declared widths)
+  # The flow_dissector context — as in the kernel's bpf_flow_dissect: zero flow_keys (56 bytes — struct bpf_flow_keys as little-endian bytes),
+  # put the raw Ethernet h_proto into n_proto (bytes[12], bytes[13] as is), nhoff = thoff = 14. After the program the harness reads with _h_keys, clamping nhoff to [14, n]
+  # and thoff to [nhoff, n] (ipv4_src / ipv4_dst are the same bytes as ipv6_src[0] / [1] — a union).
   class FlowCtx
     def initialize(bytes)
       @bytes = bytes
@@ -654,7 +654,7 @@ end
       nil
     end
 
-
+    # Field offset (bytes) and width (bytes) — the bpf_flow_keys rows of bpf-mlir's UAPI table
     def _h_off(f)
       if f == :nhoff
         return 0
@@ -719,7 +719,7 @@ end
       _h_get(_h_off(f) + 4 * i, _h_width(f))
     end
 
-
+    # set_key(:f, v) or set_key(:ipv6_src / :ipv6_dst, i, v)
     def set_key(f, a, b = 0)
       if f == :ipv6_src || f == :ipv6_dst
         _h_put(_h_off(f) + 4 * a, 4, b)
@@ -729,7 +729,7 @@ end
       nil
     end
 
-
+    # The key values after the program (clamped as in the kernel — cl 0 drops the thoff clamp for the flow-noclamp mutation; the argument is not named clamp: the name Comparable#clamp makes Spinel splice in its builtins, which shifts the user file's line numbers). Same order as SpinelBPF::FLOW_KEYS
     def _h_keys(cl)
       n = @bytes.length
       nh = _h_get(0, 2)
@@ -752,7 +752,7 @@ end
     end
   end
 
-
+  # The netfilter context — the harness makes and passes twins of the declared kernel structs (state's hook / pf, skb's len).
   class NfCtx
     def initialize(state, skb)
       @state = state
@@ -786,7 +786,7 @@ end
       raise "twin: argument #{i} is not a declared struct argument"
     end
 
-
+    # A nullable struct argument (nil when the harness gives `a<i>=null`)
     def kptr_or_null(i, t)
       j = 0
       while j < @idx.length
@@ -803,8 +803,8 @@ end
     end
   end
 
-
-
+  # The uprobe twin: the integer arguments (args[n]), string arguments (strs[n] — UserStr) and buffer arguments (bufs[n] — UserBuf) are
+  # made by the harness from its cfix commands
   class UprobeCtx
     def initialize(args, strs, bufs)
       @args = args
@@ -825,7 +825,7 @@ end
     end
   end
 
-
+  # A user string (an Array of bytes; null means a NULL pointer)
   class UserStr
     def initialize(bytes, null)
       @bytes = bytes
@@ -841,7 +841,7 @@ end
     end
   end
 
-
+  # The twin's user buffer (bytes is the memory behind the pointer — the harness puts at least the read length; null means a NULL pointer)
   class UserBuf
     def initialize(bytes, null)
       @bytes = bytes
@@ -857,7 +857,7 @@ end
     end
   end
 
-
+  # The twin's argv (a list of UserStr — only the elements before the NULL terminator; an empty element is an empty-string UserStr)
   class UserStrArray
     def initialize(items)
       @items = items
@@ -883,13 +883,13 @@ end
     end
   end
 
-
+  # The status of a NULL read (−14 = −EFAULT — the harness sets it to 0 for the mutation control)
   USTR_NULL_STATUS = [-14]
 
-
+  # The boundary of adjust_head's shrinking side (0 means the default 14 — the harness sets 13 for the adjh-bound mutation control)
   ADJH_BOUND = [0]
 
-
+  # A synthetic uretprobe context (the harness truncates the return value to the declared width)
   class UretprobeCtx
     def initialize(ret)
       @ret = ret
@@ -900,7 +900,7 @@ end
     end
   end
 
-
+  # A synthetic ksyscall context (args holds, at index n, the value truncated to the declared width — the same shape as kprobe)
   class KsyscallCtx
     def initialize(args, strs, arrs)
       @args = args
@@ -912,18 +912,18 @@ end
       @args[n]
     end
 
-
+    # A :user_str argument (the UserStr the harness gave — NULL gives status −14, empty gives 1 (the value on 7.1.8))
     def str_arg(n)
       @strs[n]
     end
 
-
+    # A :user_str_array argument (the UserStrArray the harness gave — zero elements means a NULL argv)
     def argv_arg(n)
       @arrs[n]
     end
   end
 
-
+  # A synthetic tracepoint context (fields maps a field name (String) to its value (the harness truncates it to the declared width))
   class TracepointCtx
     def initialize(fields, strs, arrs, bytes)
       @fields = fields
@@ -932,7 +932,7 @@ end
       @bytes = bytes
     end
 
-
+    # A fixed byte-array field (the N bytes the harness gave — a field it does not write is all 0)
     def copy(name)
       @bytes[name.to_s]
     end
@@ -941,18 +941,18 @@ end
       @fields[name.to_s]
     end
 
-
+    # A :user_str field (the UserStr the harness gave — NULL gives status −14, empty gives 1 (the value on 7.1.8))
     def str_field(name)
       @strs[name.to_s]
     end
 
-
+    # A :user_str_array field (the UserStrArray the harness gave)
     def argv_field(name)
       @arrs[name.to_s]
     end
   end
 
-
+  # A synthetic raw_tp context (args is 12 integers)
   class RawTpCtx
     def initialize(args)
       @args = args
@@ -963,7 +963,7 @@ end
     end
   end
 
-
+  # A synthetic kretprobe context (the harness truncates the return value to the declared width)
   class KretprobeCtx
     def initialize(ret)
       @ret = ret
@@ -974,8 +974,8 @@ end
     end
   end
 
-
-
+  # The socket_filter context — len is the test-run frame's byte count n minus hdr (the kernel's test run strips the 14 Ethernet bytes;
+  # the harness passes 14 as hdr).
   class SocketFilterCtx
     def initialize(n, hdr)
       @len = n - hdr
@@ -987,7 +987,7 @@ end
   end
 
   class KprobeCtx
-
+    # reads: "<n>_<offset>" → [value, status] (given by the harness — a read it does not give is [0, 0])
     def initialize(args, reads)
       @args = args
       @reads = reads
@@ -1017,7 +1017,7 @@ end
       _h_view(@name, @slot)
     end
 
-    def atomic_add(member, a, b = 0)
+    def atomic_add(member, a, b = 0) # (:m, d), or (:m, k, d) for an array member — _h_radd tells them apart by member
       _h_radd(@name, @slot, member, a, b)
     end
   end
@@ -1025,7 +1025,7 @@ end
   class RecordMap
     def initialize(name, sample, max_entries)
       @name = name
-      @sample = _h_flat(name, sample)
+      @sample = _h_flat(name, sample) # a flat Array (an array member contributes one entry per element — generated by the harness)
       @max_entries = max_entries
       @slots = []
       i = 0
@@ -1047,7 +1047,7 @@ end
       key >= 0 && key < @max_entries
     end
 
-
+    # update copies the value's members into the slot (as with the kernel's array update — a reference from an earlier lookup also sees the new value).
     def update(key, value)
       if in_range(key)
         src = value.to_a
@@ -1067,7 +1067,7 @@ end
       nil
     end
 
-
+    # slot / reset are used by the twin harness (not part of the eBPF-side API).
     def slot(key)
       @slots[key]
     end
@@ -1086,9 +1086,9 @@ end
     end
   end
 
-
-
-
+  # The ring buffer twin (with a capacity model). A reservation's size is round_up(8 + record bytes, 8) (8 is the kernel's event header);
+  # output is false when in-use + reservation > limit (size − 1 — the mask of the kernel's __bpf_ringbuf_reserve). drain returns the events, empties the ring and sets in-use to 0
+  # (the kernel frees only what the consumer has read — the harness's drain reads everything). The harness sets the record bytes and the limit from the schema with _h_set.
   class RingBuf
     def initialize(name, sample, size)
       @name = name
@@ -1121,9 +1121,9 @@ end
       true
     end
 
-
-
-
+    # output_str — a model of probe_read_user_str (differential runs against the kernel check it): NULL leaves field at 0 with status −14 (USTR_NULL_STATUS),
+    # otherwise writes min(length, N − 1) bytes and a NUL into field, and the status is the bytes written + 1 (N when truncated, 1 when empty — the 7.1.8 value). The status goes into status_field.
+    # The reservation limit is the same as output's (nil when none can be taken).
     def output_str(value, field, str, status_field)
       if @reserve == 0
         raise "BPF::RingBuf #{@name}: the twin has no record size (the harness sets it)"
@@ -1154,8 +1154,8 @@ end
       OutputStr.new(st, true)
     end
 
-
-
+    # output_buf — a model of bpf-mlir's user.read (differential runs against the kernel check it): n = max(0, min(len, N)); with field zeroed first,
+    # NULL with n > 0 gives status −14 (USTR_NULL_STATUS — field stays 0), otherwise it copies the first n bytes with status 0 (also 0 for n = 0). n goes into count_field.
     def output_buf(value, field, buf, len, status_field, count_field)
       if @reserve == 0
         raise "BPF::RingBuf #{@name}: the twin has no record size (the harness sets it)"
@@ -1192,8 +1192,8 @@ end
       OutputStr.new(st, true)
     end
 
-
-
+    # output_argv: pushes one event per element of the first 20 elements of the twin's argv — the string into field (the first N−1 bytes and a NUL), status is length + 1,
+    # the element number into index_field. An element whose reservation fails is not pushed (as with a failed kernel reserve — only that slot's event is missing)
     def output_argv(value, field, argv, status_field, index_field)
       if @reserve == 0
         raise "BPF::RingBuf #{@name}: the twin has no record size (the harness sets it)"
@@ -1229,7 +1229,7 @@ end
       0
     end
 
-
+    # output_comm: copies the twin's current comm (BPF::TASK_COMM — set by the harness) into field; status is 0 (bpf_get_current_comm's success)
     def output_comm(value, field, status_field)
       if @reserve == 0
         raise "BPF::RingBuf #{@name}: the twin has no record size (the harness sets it)"
@@ -1250,7 +1250,7 @@ end
       OutputStr.new(0, true)
     end
 
-
+    # output_str_or_discard: the same model as output_str, but on status < 0 it pushes no event and returns the reservation (discard)
     def output_str_or_discard(value, field, str, status_field)
       r = output_str(value, field, str, status_field)
       if r.nil?
@@ -1272,7 +1272,7 @@ end
     end
   end
 
-
+  # HashRef is a present borrow of the twin's integer-valued hash.
   class HashRef
     def initialize(map, key)
       @map = map
@@ -1288,7 +1288,7 @@ end
     end
   end
 
-
+  # LruHashRef is a present borrow of the twin's lru_hash (sharing HashRef with HashMap makes HashRef's @map polymorphic — caught by the static test of the library's types).
   class LruHashRef
     def initialize(map, key)
       @map = map
@@ -1304,8 +1304,8 @@ end
     end
   end
 
-
-
+  # The twin's hash map. Values are Integers (lookup gives a HashRef). Entries map a key string (the member values joined with `,` — one key type for Spinel's Hash) → value.
+  # Capacity model: a new key when the entries are at capacity (max_entries — a preallocated hash) gives −E2BIG; replacing an existing key succeeds even when full.
   class HashMap
     def initialize(name, key, value, max_entries)
       @name = name
@@ -1327,7 +1327,7 @@ end
       @max_entries
     end
 
-
+    # _h_cap is used only by the harness's mutation control (hash-cap — a misread capacity).
     def _h_cap(n)
       @cap = n
       0
@@ -1354,7 +1354,7 @@ end
       v
     end
 
-
+    # write gives the status of try_update (flag 0 any, 1 noexist, 2 exist).
     def write(key, value, flag)
       s = kstr(key)
       has = @vals.key?(s)
@@ -1405,7 +1405,7 @@ end
       write(key, delta, 1)
     end
 
-
+    # peek / atomic_add are used by HashRef (the present borrow).
     def peek(s)
       @vals[s]
     end
@@ -1423,7 +1423,7 @@ end
       nil
     end
 
-
+    # _h_keys / _h_val / reset are used by the twin harness (not part of the eBPF-side API).
     def _h_keys
       @order.dup
     end
@@ -1439,8 +1439,8 @@ end
     end
   end
 
-
-
+  # The twin's lru_hash map. Values are Integers (lookup gives a HashRef). Entries map a key string (the member values joined with `,` — one key type for Spinel's Hash) → value.
+  # Capacity model: when full, evict the oldest inserted key and return status 0 (the kernel's LRU is approximate and depends on per-CPU lists, so the victim is not fixed — the differential compares only counts).
   class LruHashMap
     def initialize(name, key, value, max_entries)
       @name = name
@@ -1462,7 +1462,7 @@ end
       @max_entries
     end
 
-
+    # _h_cap is used only by the harness's mutation control (hash-cap — a misread capacity).
     def _h_cap(n)
       @cap = n
       0
@@ -1489,7 +1489,7 @@ end
       v
     end
 
-
+    # write gives the status of try_update (flag 0 any, 1 noexist, 2 exist).
     def write(key, value, flag)
       s = kstr(key)
       has = @vals.key?(s)
@@ -1541,7 +1541,7 @@ end
       write(key, delta, 1)
     end
 
-
+    # peek / atomic_add are used by HashRef (the present borrow).
     def peek(s)
       @vals[s]
     end
@@ -1559,7 +1559,7 @@ end
       nil
     end
 
-
+    # _h_keys / _h_val / reset are used by the twin harness (not part of the eBPF-side API).
     def _h_keys
       @order.dup
     end
@@ -1575,8 +1575,8 @@ end
     end
   end
 
-
-
+  # The twin's hash map. Values are Arrays of member values (lookup gives a RecordRef — the view is the harness's _h_view, additions go through _h_radd). Entries map a key string (the member values joined with `,` — one key type for Spinel's Hash) → value.
+  # Capacity model: a new key when the entries are at capacity (max_entries — a preallocated hash) gives −E2BIG; replacing an existing key succeeds even when full.
   class RecordHashMap
     def initialize(name, key, value, max_entries)
       @name = name
@@ -1598,7 +1598,7 @@ end
       @max_entries
     end
 
-
+    # _h_cap is used only by the harness's mutation control (hash-cap — a misread capacity).
     def _h_cap(n)
       @cap = n
       0
@@ -1625,7 +1625,7 @@ end
       v
     end
 
-
+    # write gives the status of try_update (flag 0 any, 1 noexist, 2 exist).
     def write(key, value, flag)
       s = kstr(key)
       has = @vals.key?(s)
@@ -1675,7 +1675,7 @@ end
       nil
     end
 
-
+    # _h_keys / _h_val / reset are used by the twin harness (not part of the eBPF-side API).
     def _h_keys
       @order.dup
     end
@@ -1691,8 +1691,8 @@ end
     end
   end
 
-
-
+  # The twin's lru_hash map. Values are Arrays of member values (lookup gives a RecordRef — the view is the harness's _h_view, additions go through _h_radd). Entries map a key string (the member values joined with `,` — one key type for Spinel's Hash) → value.
+  # Capacity model: when full, evict the oldest inserted key and return status 0 (the kernel's LRU is approximate and depends on per-CPU lists, so the victim is not fixed — the differential compares only counts).
   class LruRecordHashMap
     def initialize(name, key, value, max_entries)
       @name = name
@@ -1714,7 +1714,7 @@ end
       @max_entries
     end
 
-
+    # _h_cap is used only by the harness's mutation control (hash-cap — a misread capacity).
     def _h_cap(n)
       @cap = n
       0
@@ -1741,7 +1741,7 @@ end
       v
     end
 
-
+    # write gives the status of try_update (flag 0 any, 1 noexist, 2 exist).
     def write(key, value, flag)
       s = kstr(key)
       has = @vals.key?(s)
@@ -1792,7 +1792,7 @@ end
       nil
     end
 
-
+    # _h_keys / _h_val / reset are used by the twin harness (not part of the eBPF-side API).
     def _h_keys
       @order.dup
     end
@@ -1808,7 +1808,7 @@ end
     end
   end
 
-
+  # PerCpuMapRef is a present borrow of the twin's per-CPU map (sharing MapRef makes MapRef's @map polymorphic and corrupts the twin's types — the gate's TestTwinTypes checks this).
   class PerCpuMapRef
     def initialize(map, key)
       @map = map
@@ -1824,7 +1824,7 @@ end
     end
   end
 
-
+  # PerCpuHashRef is a present borrow of the twin's per-CPU map (sharing HashRef makes HashRef's @map polymorphic and corrupts the twin's types — the gate's TestTwinTypes checks this).
   class PerCpuHashRef
     def initialize(map, key)
       @map = map
@@ -1840,7 +1840,7 @@ end
     end
   end
 
-
+  # The twin's per-CPU map — with a single CPU, the same as the BPF::ArrayMap twin (the harness compares with the kernel's per-CPU sum; the kernel harness pins itself to one CPU).
   class PerCpuArrayMap
     def initialize(name, value_type, max_entries)
       @name = name
@@ -1879,7 +1879,7 @@ end
       v
     end
 
-
+    # reset lets the twin harness set every slot to 0 (not part of the eBPF-side API).
     def reset
       i = 0
       while i < @max_entries
@@ -1889,7 +1889,7 @@ end
       0
     end
 
-
+    # poke lets the twin harness place an input (not part of the eBPF-side API).
     def poke(key, value)
       @vals[key] = value
     end
@@ -1915,17 +1915,17 @@ end
       nil
     end
 
-
+    # peek lets the twin harness read a map value (not part of the eBPF-side API).
     def peek(key)
       @vals[key]
     end
   end
 
-
+  # The twin's per-CPU map — with a single CPU, the same as the BPF::RecordMap twin (the harness compares with the kernel's per-CPU sum; the kernel harness pins itself to one CPU).
   class PerCpuRecordMap
     def initialize(name, sample, max_entries)
       @name = name
-      @sample = _h_flat(name, sample)
+      @sample = _h_flat(name, sample) # a flat Array (an array member contributes one entry per element — generated by the harness)
       @max_entries = max_entries
       @slots = []
       i = 0
@@ -1947,7 +1947,7 @@ end
       key >= 0 && key < @max_entries
     end
 
-
+    # update copies the value's members into the slot (as with the kernel's array update — a reference from an earlier lookup also sees the new value).
     def update(key, value)
       if in_range(key)
         src = value.to_a
@@ -1967,7 +1967,7 @@ end
       nil
     end
 
-
+    # slot / reset are used by the twin harness (not part of the eBPF-side API).
     def slot(key)
       @slots[key]
     end
@@ -1986,7 +1986,7 @@ end
     end
   end
 
-
+  # The twin's per-CPU map — with a single CPU, the same as the BPF::HashMap twin (the harness compares with the kernel's per-CPU sum; the kernel harness pins itself to one CPU).
   class PerCpuHashMap
     def initialize(name, key, value, max_entries)
       @name = name
@@ -2008,7 +2008,7 @@ end
       @max_entries
     end
 
-
+    # _h_cap is used only by the harness's mutation control (hash-cap — a misread capacity).
     def _h_cap(n)
       @cap = n
       0
@@ -2035,7 +2035,7 @@ end
       v
     end
 
-
+    # write gives the status of try_update (flag 0 any, 1 noexist, 2 exist).
     def write(key, value, flag)
       s = kstr(key)
       has = @vals.key?(s)
@@ -2086,7 +2086,7 @@ end
       write(key, delta, 1)
     end
 
-
+    # peek / atomic_add are used by HashRef (the present borrow).
     def peek(s)
       @vals[s]
     end
@@ -2104,7 +2104,7 @@ end
       nil
     end
 
-
+    # _h_keys / _h_val / reset are used by the twin harness (not part of the eBPF-side API).
     def _h_keys
       @order.dup
     end
@@ -2120,7 +2120,7 @@ end
     end
   end
 
-
+  # The twin's per-CPU map — with a single CPU, the same as the BPF::RecordHashMap twin (the harness compares with the kernel's per-CPU sum; the kernel harness pins itself to one CPU).
   class PerCpuRecordHashMap
     def initialize(name, key, value, max_entries)
       @name = name
@@ -2142,7 +2142,7 @@ end
       @max_entries
     end
 
-
+    # _h_cap is used only by the harness's mutation control (hash-cap — a misread capacity).
     def _h_cap(n)
       @cap = n
       0
@@ -2169,7 +2169,7 @@ end
       v
     end
 
-
+    # write gives the status of try_update (flag 0 any, 1 noexist, 2 exist).
     def write(key, value, flag)
       s = kstr(key)
       has = @vals.key?(s)
@@ -2219,7 +2219,7 @@ end
       nil
     end
 
-
+    # _h_keys / _h_val / reset are used by the twin harness (not part of the eBPF-side API).
     def _h_keys
       @order.dup
     end
@@ -2235,7 +2235,7 @@ end
     end
   end
 
-
+  # LpmRef is a present borrow of the twin's lpm_trie (the ref class is not shared with other maps: sharing makes its @map polymorphic and corrupts the twin's types).
   class LpmRef
     def initialize(map, i)
       @map = map
@@ -2247,9 +2247,9 @@ end
     end
   end
 
-
-
-
+  # The twin's lpm_trie map. Entries are three Integer arrays: prefixlen, address (u32 — the 4 network-order bytes, most significant first) and value (one element type).
+  # lookup scans every entry for the largest matching prefixlen (a naive longest-prefix match). Capacity model: a new prefix with max_entries entries gives −ENOSPC;
+  # overwriting an existing prefix succeeds even when full (the same as measured on three kernels by go-bpf-mlir and mojo-bpf-mlir).
   class LpmTrieMap
     def initialize(name, value, max_entries)
       @name = name
@@ -2281,7 +2281,7 @@ end
       u
     end
 
-
+    # _h_shortest / _h_full_overwrite are used only by the harness's mutation controls (lpm-shortest — shortest match; lpm-full-overwrite — an overwrite when full gives −ENOSPC).
     def _h_shortest
       @shortest = true
       0
@@ -2299,7 +2299,7 @@ end
       (0xffffffff << (32 - plen)) & 0xffffffff
     end
 
-
+    # lpm_best is the index of the entry containing x (longest match — −1 if none).
     def lpm_best(x)
       best = -1
       i = 0
@@ -2326,7 +2326,7 @@ end
       @vals[i]
     end
 
-
+    # _h_addr is the u32 of "a.b.c.d" (the tests write the harness input — malformed input is not checked).
     def _h_addr(s)
       p = s.split(".")
       (p[0].to_i << 24) | (p[1].to_i << 16) | (p[2].to_i << 8) | p[3].to_i
@@ -2343,7 +2343,7 @@ end
       -1
     end
 
-
+    # _h_put / _h_remove / _h_match / _h_list / reset are used by the twin harness (not part of the eBPF-side API). put gives 0 or −28, remove 0 or −2.
     def _h_put(prefix, v)
       f = prefix.split("/")
       plen = f[1].to_i
@@ -2377,7 +2377,7 @@ end
       0
     end
 
-
+    # _h_match is the longest match's value in decimal, or "absent" (spelled as by lpm_match on the kernel side).
     def _h_match(s)
       i = lpm_best(_h_addr(s))
       if i < 0
@@ -2390,7 +2390,7 @@ end
       "#{(a >> 24) & 255}.#{(a >> 16) & 255}.#{(a >> 8) & 255}.#{a & 255}"
     end
 
-
+    # _h_list gives "a.b.c.d/n v" lines (the harness reorders them).
     def _h_list
       out = [""]
       out.pop
@@ -2462,7 +2462,7 @@ end
     name
   end
 
-
+  # The twin's fmod_ret return value is e itself (FMOD_CALL is 0 — the harness prints it as ret=)
   def self.fmod_return(e)
     e
   end

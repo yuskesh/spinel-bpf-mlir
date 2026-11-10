@@ -1,6 +1,6 @@
 require "bpf"
 
-
+# The field name is not a Symbol literal
 def p(ctx)
   ctx.set_key("thoff", 14)
   BPF::FLOW_OK

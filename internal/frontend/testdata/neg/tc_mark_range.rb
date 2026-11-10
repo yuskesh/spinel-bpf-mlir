@@ -1,6 +1,6 @@
 require "bpf"
 
-
+# A value for mark whose range exceeds u32 (w.be32(0) + 1)
 def p(skb)
   x = 0
   w = skb.check(0, 14)

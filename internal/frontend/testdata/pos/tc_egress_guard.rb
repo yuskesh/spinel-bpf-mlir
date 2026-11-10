@@ -1,6 +1,6 @@
 require "bpf"
 
-
+# sched_cls (tcx egress): early-return guards with TC verdicts, ending with BPF::TC_PASS
 Seen = BPF::ArrayMap.new("Seen", :u64, 2)
 
 def filter_out(skb)

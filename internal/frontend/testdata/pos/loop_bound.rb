@@ -1,6 +1,6 @@
 require "bpf"
 
-
+# Runtime trip counts: N is the range's upper end; a negative lower end needs an explicit clamp (to 0); 64 additions give the range [0, 16320], which fits a u16 member
 Pair = Struct.new(:a, :b)
 BPF.record(Pair, a: :u16, b: :u16)
 Pairs = BPF::RecordMap.new("Pairs", Pair.new(0, 0), 1)

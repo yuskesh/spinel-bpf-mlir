@@ -2,11 +2,18 @@ package frontend
 
 import "math/big"
 
+// A fixed-width read behind a kprobe pointer argument — `v, st = ctx.read(n, offset, :type)` (bpf-mlir's ebpf.kernel.read_scalar,
+// which returns the value and the raw helper status). n is a parameter number declared :ptr in `BPF.kprobe … params:`, offset is a
+// literal in 0..4095, and the type is one of :i8 … :u64. A failure gives the value 0 and a negative status, so the status follows the
+// SB026 local rule (assigned exactly once and read at least once — there is no form that discards it with `_`, because a failure
+// could not then be told apart from a real 0).
+
+// kreadMaxOffset is the upper bound of read_scalar's offset: bpf-mlir's op accepts only a non-negative constant offset in 0..4095.
 const kreadMaxOffset = 4095
 
 func (c *progCtx) kreadStmt(n *Node) (Stmt, bool) {
 	s, ok := c.kreadBind(n)
-	if !ok {
+	if !ok { // the locals on the left of a stopped read are not reported again at later reads (like a poisoned assignment)
 		for _, t := range c.a.arr(n, "lefts") {
 			if t.Type == "LocalVariableTargetNode" {
 				c.poisoned[t.Str["name"]] = true
@@ -85,13 +92,16 @@ func (c *progCtx) kreadBind(n *Node) (Stmt, bool) {
 		vi := &varInfo{Iv: widthRange(f.Bits, f.Signed)}
 		if f.Bits == 64 && !f.Signed {
 			vi.Iv = iv(new(big.Int), new(big.Int).Set(u64Max))
+			vi.Wide = true // the 64 bits are held as i64, so the value is Wide like a u64 map value
 		}
 		c.env[vn] = vi
 	}
-	c.env[sn] = &varInfo{Iv: iv(new(big.Int).Neg(new(big.Int).Lsh(big.NewInt(1), 63)), new(big.Int))}
+	c.env[sn] = &varInfo{Iv: iv(new(big.Int).Neg(new(big.Int).Lsh(big.NewInt(1), 63)), new(big.Int))} // the raw status — 0 or negative
 	return Stmt{Kind: "kread", Var: vn, Path: sn, Field: f, Count: nb.Int64(), Len: ob.Int64(), Pos: c.z.pos(c.a, n)}, true
 }
 
+// kreadStatusOK checks the status local rule (SB026 — the same as the hash map's statusLocalOK): this is the only assignment to the
+// name, and the name is read at least once.
 func (c *progCtx) kreadStatusOK(t *Node, name, what, failed string) bool {
 	writes, reads := 0, 0
 	walk(c.a, c.def, func(x *Node) bool {

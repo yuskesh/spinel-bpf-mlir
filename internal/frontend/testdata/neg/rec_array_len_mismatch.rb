@@ -1,6 +1,6 @@
 require "bpf"
 
-
+# The template's array length (7) differs from the declared N (8)
 Hist = Struct.new(:hist, :n)
 BPF.record(Hist, hist: [:u32, 8], n: :u64)
 Hs = BPF::RecordMap.new("Hs", Hist.new(Array.new(7, 0), 0), 4)

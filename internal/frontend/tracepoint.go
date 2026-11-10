@@ -5,15 +5,24 @@ import (
 	"strings"
 )
 
+// Tracepoint programs: `BPF.tracepoint :name, "category/event", fields: {name => [offset, :type], …}`. The author copies each field's
+// offset and type from tracefs's `events/<category>/<event>/format` (they change with the kernel version — before load, bpf-mlir
+// checks the requirements tpfield lines against the target's tracefs and stops on a mismatch and when it cannot decide). The frontend
+// only checks the shape of the declaration (the rules for fields in bpf-mlir's schema).
+
+// TpField is a field declared by a tracepoint program (name, byte offset from the start of the record, and type Symbol :u8 … :i64).
 type TpField struct {
 	Name   string
 	Offset int64
 	Type   string
-	N      int
+	// N is the element count of a fixed-size byte array (`[off, [:u8, N]]`; Type is u8 / i8; 0 means not an array). ctx.copy(:f)
+	// copies it into an array member of a record (bpf-mlir's tp.field.copy)
+	N int
 }
 
 var tpIdent = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
 
+// tpMaxCtx is the size limit of a tracepoint's ctx (bpf-mlir's kTracepointMaxCtx — the kernel's PERF_MAX_TRACE_SIZE).
 const tpMaxCtx = 8192
 
 const tracepointShape = "`BPF.tracepoint :name, \"category/event\", fields: {name => [offset, :type], …}`"
@@ -47,7 +56,7 @@ func (z *analyzer) tracepointDecl(a *AST, n *Node, as []*Node, bad func(string, 
 		}
 		name := k.Str["value"]
 		els := a.arr(v, "elements")
-		if len(els) == 2 && els[0].Type == "IntegerNode" && els[1].Type == "ArrayNode" {
+		if len(els) == 2 && els[0].Type == "IntegerNode" && els[1].Type == "ArrayNode" { // a fixed-size byte array `[off, [:u8, N]]`
 			f, ok := z.tpArrayField(a, name, els, bad)
 			if !ok {
 				return rootDecl{}, false
@@ -64,7 +73,7 @@ func (z *analyzer) tracepointDecl(a *AST, n *Node, as []*Node, bad func(string, 
 		}
 		t := els[1].Str["value"]
 		rt, ok := recordTypes[t]
-		if t == "user_str" || t == "user_str_array" {
+		if t == "user_str" || t == "user_str_array" { // a char * field — an 8-byte user pointer (into output_str through ctx.str_field(:f)); a char ** (argv — into output_argv through ctx.argv_field(:f))
 			rt, ok = [2]int{64, 0}, true
 		}
 		if !ok {
@@ -80,7 +89,7 @@ func (z *analyzer) tracepointDecl(a *AST, n *Node, as []*Node, bad func(string, 
 			return bad("field %s at offset %d: field names are C identifiers and neither a name nor an offset appears twice", name, o)
 		}
 		seenN[name], seenO[o] = true, true
-		if mutation("tpfield-shift") && name == "fd" {
+		if mutation("tpfield-shift") && name == "fd" { // mutation: add 8 to both the declared and the read offset of fd (an error on which the schema and the op agree)
 			o += 8
 		}
 		r.TFields = append(r.TFields, TpField{Name: name, Offset: o, Type: t})
@@ -88,6 +97,8 @@ func (z *analyzer) tracepointDecl(a *AST, n *Node, as []*Node, bad func(string, 
 	return r, true
 }
 
+// tpArrayField reads `name: [off, [:u8, N]]` (bpf-mlir's schema `{kind: array, elem: u8|i8, n: N}`): elem is :u8 / :i8, N is a
+// literal 1..64, and offset is a literal ≥ 8 (alignment 1 — the array has byte width) with offset + N ≤ 8192.
 func (z *analyzer) tpArrayField(a *AST, name string, els []*Node, bad func(string, ...any) (rootDecl, bool)) (TpField, bool) {
 	ae := a.arr(els[1], "elements")
 	if len(ae) != 2 || ae[0].Type != "SymbolNode" || ae[1].Type != "IntegerNode" || (ae[0].Str["value"] != "u8" && ae[0].Str["value"] != "i8") {

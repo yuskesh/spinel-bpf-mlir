@@ -2,7 +2,7 @@ require "bpf"
 
 Out = BPF::ArrayMap.new("Out", :i64, 4)
 
-
+# A literal count above 64
 def prog(ctx)
   s = 0
   65.times { |i| s += i }

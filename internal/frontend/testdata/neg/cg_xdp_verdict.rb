@@ -1,6 +1,6 @@
 require "bpf"
 
-
+# cgroup_skb returns an XDP verdict
 def p(skb)
   BPF::XDP_PASS
 end

@@ -2,7 +2,7 @@ require "bpf"
 
 Out = BPF::ArrayMap.new("Out", :i64, 4)
 
-
+# Reads a block-local after the loop
 def prog(ctx)
   4.times do |i|
     t = i * 2

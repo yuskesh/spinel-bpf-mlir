@@ -1,6 +1,6 @@
 require "bpf"
 
-
+# An xdp program returns a cgroup_skb verdict
 def p(ctx)
   BPF::CG_ALLOW
 end

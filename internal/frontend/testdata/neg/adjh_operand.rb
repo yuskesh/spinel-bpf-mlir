@@ -1,6 +1,6 @@
 require "bpf"
 
-
+# Uses the adjust_head status as an arithmetic operand
 Out = BPF::ArrayMap.new("Out", :i64, 1)
 
 def p(ctx)

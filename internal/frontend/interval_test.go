@@ -5,6 +5,7 @@ import (
 	"testing"
 )
 
+// TestFloorDiv checks that floorDiv agrees with Ruby's Integer#/ (the expected values are CRuby's).
 func TestFloorDiv(t *testing.T) {
 	for _, c := range [][3]int64{{-7, 2, -4}, {7, -2, -4}, {-7, -2, 3}, {7, 2, 3}, {6, -2, -3}, {-8, 8, -1}, {0, -8, 0}} {
 		if got := floorDiv(big.NewInt(c[0]), big.NewInt(c[1])); got.Int64() != c[2] {
@@ -24,6 +25,8 @@ func TestIvBit(t *testing.T) {
 	}
 }
 
+// TestUnescape tests the decoding of the percent-encoding in Spinel's text AST (Spinel escapes strings there with percent-encoding,
+// not with the backslashes its documentation describes).
 func TestUnescape(t *testing.T) {
 	for in, want := range map[string]string{"%25": "%", "a%20b": "a b", "x%0Ay": "x\ny", "plain": "plain", "%2": "%2", "100%25%25": "100%%"} {
 		if got := unescape(in); got != want {

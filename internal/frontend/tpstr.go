@@ -1,5 +1,12 @@
 package frontend
 
+// User string fields of a tracepoint: `fields: {f: [off, :user_str]}` (a char * field — 8 bytes) and
+// `R.output_str(S.new(…), :name, ctx.str_field(:f), :status)` / `output_str_or_discard`. str_field is allowed only as output_str's
+// third argument (like uprobe's str_arg — it cannot go into a local, arithmetic, a comparison or a map). Lowering emits
+// `ebpf.tp.field … -> !ebpf.user_str` before reserve, and `ebpf.user.read_str` inside present ("ostr"'s TpStr). The requirements
+// line `tpfield <p> <f> <off> 8 strptr` (format version 16) is checked against tracefs's char * (pointer depth 1) before load.
+
+// outputTpStr checks `ctx.str_field(:f)` as output_str's third argument (tracepoint).
 func (c *progCtx) outputTpStr(call *Node, as []*Node, r *RingDecl, meth string, f, st *RecordField, name, refVar string) (Stmt, bool) {
 	sa := as[2]
 	if sa.Type != "CallNode" || sa.Str["name"] != "str_field" || !c.isVarRead(c.a.ref(sa, "receiver"), c.param) {

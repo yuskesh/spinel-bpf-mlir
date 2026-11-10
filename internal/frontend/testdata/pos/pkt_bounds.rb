@@ -2,7 +2,7 @@ require "bpf"
 
 Out = BPF::ArrayMap.new("Out", :u32, 4)
 
-
+# Boundaries: lengths 1 and 65535, offset limit 65535 − N, index limit i + width = N
 def bounds(ctx)
   a = ctx.check(65521, 14)
   if a

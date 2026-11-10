@@ -1,6 +1,6 @@
 require "bpf"
 
-
+# A variable other than the condition's (j) — k does not narrow
 Hist = Struct.new(:hist, :n)
 BPF.record(Hist, hist: [:u32, 8], n: :u64)
 Hs = BPF::RecordMap.new("Hs", Hist.new(Array.new(8, 0), 0), 1)

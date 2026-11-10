@@ -1,6 +1,6 @@
 require "bpf"
 
-
+# fentry: the v0.17.0 fentry cannot read integer arguments (helpers only): counts calls from our own tgid (user space writes it to Filter)
 Filter = BPF::ArrayMap.new("Filter", :u32, 1)
 Calls = BPF::HashMap.new("Calls", :u32, :u64, 64)
 

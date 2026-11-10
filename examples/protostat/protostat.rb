@@ -1,9 +1,9 @@
 require "bpf"
 
-
-
-
-
+# The eBPF side — counts packets and bytes per frame kind in a per-CPU array of records.
+# A per-CPU map has a separate slot for each CPU and no two CPUs write the same slot at once, so a member += loses no count without atomics
+# (every program using this map is XDP — a tracing program can interrupt a softirq, so the frontend rejects += if any program kind is not XDP).
+# Kinds: 0 IPv4 UDP, 1 IPv4 TCP, 2 IPv4 ICMP, 3 IPv4 other, 4 IPv6, 5 ARP, 6 other (including frames under 14 bytes). bytes is the IPv4 total length, the IPv6 payload length + 40, or 0.
 Stats = Struct.new(:packets, :bytes)
 BPF.record(Stats, packets: :u64, bytes: :u64)
 
@@ -48,9 +48,9 @@ def protostat(ctx)
 end
 BPF.xdp :protostat
 
-
-
-
+# The user-space side — plain Ruby (compiled by Spinel).
+#   protostat --iface IF [--duration-ms MS]   attach, wait MS milliseconds, print packets / bytes per kind (summed over CPUs) and the number of non-zero slots
+#   protostat --selftest                     without attaching, run BPF_PROG_TEST_RUN on built frames (passed on 7.1.8, and on 6.12 and 6.6 in VMs)
 require "spinelbpf"
 
 USAGE = "usage: protostat --iface IF [--duration-ms MS] | --selftest"
@@ -78,7 +78,7 @@ if iface == "" && !selftest
   raise USAGE
 end
 
-
+# frame builds a frame of length n with the EtherType (plus the total length and protocol for IPv4, or the payload length for IPv6).
 def frame(n, et, total, proto)
   f = Array.new(n, 0)
   if n >= 14
@@ -97,7 +97,7 @@ def frame(n, et, total, proto)
   f
 end
 
-
+# kind_sums returns, for kind k, packets and bytes summed over CPUs and the number of non-zero slots ([packets, bytes, nz]).
 def kind_sums(obj, k)
   rows = obj.percpu_get_record(PerKind, k)
   packets = 0

@@ -1,7 +1,7 @@
 require "bpf"
 
-
-
+# tp_btf sched_switch(bool preempt, struct task_struct *prev, struct task_struct *next, unsigned int prev_state): integer arguments
+# preempt (u8) and prev_state (u32), and the pid of struct argument next. Argument 1 (prev) is not read (null in the schema args).
 Task = Struct.new(:pid)
 BPF.kernel_type(Task, "task_struct", pid: :i32)
 TaskT = BPF::KernelType.new(Task.new(0))

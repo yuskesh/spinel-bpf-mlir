@@ -7,15 +7,20 @@ import (
 	"strings"
 )
 
+// record: `S = Struct.new(:a, …)` + `BPF.record(S, a: :u16, …)` + `M = BPF::RecordMap.new("M", S.new(0, …), n)`.
+// The type, width and offset of every member come from the BPF.record declaration alone; the types Spinel infers are never used.
+
+// RecordField is one member of a record.
 type RecordField struct {
 	Name   string
 	Bits   int
 	Signed bool
-	Pad    bool
+	Pad    bool // `_pad<N>` — a hole not written to the schema or maps.json; the eBPF side never reads or writes it
 	Offset int
-	Count  int
+	Count  int // element count of an array member (`m: [:u32, 8]`); 0 means an integer member. Bits and Signed give the element type
 }
 
+// Size is the member's size in bytes (for an array, element size × count).
 func (f RecordField) Size() int {
 	if f.Count > 0 {
 		return f.Bits / 8 * f.Count
@@ -23,6 +28,7 @@ func (f RecordField) Size() int {
 	return f.Bits / 8
 }
 
+// DeclType is the member's spelling in the records of the requirements (an array is `[N]u32`, as in bpf-mlir's requirements format).
 func (f RecordField) DeclType() string {
 	if f.Count > 0 {
 		return fmt.Sprintf("[%d]%s", f.Count, f.TypeName())
@@ -30,6 +36,8 @@ func (f RecordField) DeclType() string {
 	return f.TypeName()
 }
 
+// Flat returns the member's flattened names and offsets (an array gives one `m[i]` per element), as used by the embedded table,
+// the user-space value layout and the harness slots.
 func (f RecordField) Flat() ([]string, []int) {
 	if f.Count == 0 {
 		return []string{f.Name}, []int{f.Offset}
@@ -43,6 +51,8 @@ func (f RecordField) Flat() ([]string, []int) {
 	return ns, os
 }
 
+// HasArray reports whether the record has an array member (record.make, ring buffer events and hash keys do not accept such
+// records yet).
 func (r *RecordDecl) HasArray() bool {
 	for _, f := range r.Fields {
 		if f.Count > 0 {
@@ -52,6 +62,7 @@ func (r *RecordDecl) HasArray() bool {
 	return false
 }
 
+// TypeName is the spelling of the member's type (u8 … i64, the same as in maps.json and the schema).
 func (f RecordField) TypeName() string {
 	if f.Signed {
 		return fmt.Sprintf("i%d", f.Bits)
@@ -59,6 +70,8 @@ func (f RecordField) TypeName() string {
 	return fmt.Sprintf("u%d", f.Bits)
 }
 
+// Range is the value range of the member's type (u64 stops at 2^63−1, the upper bound of a Ruby Integer — the same limit as the
+// value-range rule for map stores).
 func (f RecordField) Range() Ival {
 	if f.Signed {
 		lo := new(big.Int).Neg(new(big.Int).Lsh(bigOne, uint(f.Bits-1)))
@@ -71,15 +84,17 @@ func (f RecordField) Range() Ival {
 	return iv(new(big.Int), new(big.Int).Sub(new(big.Int).Lsh(bigOne, uint(f.Bits)), bigOne))
 }
 
+// RecordDecl is a record declaration (the name of the Struct constant is the symbol in the schema).
 type RecordDecl struct {
 	Const     string
 	Fields    []RecordField
 	Size      int
 	Align     int
-	Pos       Pos
-	StructPos Pos
+	Pos       Pos // position of BPF.record
+	StructPos Pos // position of `S = Struct.new(…)` (the twin's keptSource keeps it)
 }
 
+// Field returns the member with the given name (nil if there is none).
 func (r *RecordDecl) Field(name string) *RecordField {
 	for i := range r.Fields {
 		if r.Fields[i].Name == name {
@@ -89,8 +104,10 @@ func (r *RecordDecl) Field(name string) *RecordField {
 	return nil
 }
 
+// MLIRType is `!ebpf.record<"S", size>`.
 func (r *RecordDecl) MLIRType() string { return fmt.Sprintf(`!ebpf.record<%q, %d>`, r.Const, r.Size) }
 
+// Shape is one row of the layout table (`S|size=24;a:0:u32;_pad0:4:u8;…` — the embedded spinelbpf_records).
 func (r *RecordDecl) Shape() string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "%s|size=%d;", r.Const, r.Size)
@@ -110,10 +127,12 @@ var recordTypes = map[string][2]int{
 	"i8": {8, 1}, "i16": {16, 1}, "i32": {32, 1}, "i64": {64, 1},
 }
 
+// structDecl holds the member names of `S = Struct.new(:a, :b)` (nil for any other shape — a user-side Struct is not checked
+// unless it is a record, so nothing is rejected here).
 type structInfo struct {
 	names []string
 	pos   Pos
-	bad   string
+	bad   string // why the shape cannot be a record ("" means it can)
 }
 
 func (z *analyzer) structOf(a *AST, n *Node) (*structInfo, bool) {
@@ -147,6 +166,7 @@ func (z *analyzer) structOf(a *AST, n *Node) (*structInfo, bool) {
 	return s, true
 }
 
+// recordDecl reads a top-level `BPF.record(S, a: :u16, …)`.
 func (z *analyzer) recordDecl(a *AST, n *Node, structs map[string]*structInfo) {
 	p := z.pos(a, n)
 	as := args(a, n)
@@ -174,7 +194,7 @@ func (z *analyzer) recordDecl(a *AST, n *Node, structs map[string]*structInfo) {
 	for _, e := range a.arr(as[1], "elements") {
 		k, v := a.ref(e, "key"), a.ref(e, "value")
 		count := 0
-		if e.Type == "AssocNode" && k != nil && k.Type == "SymbolNode" && v != nil && v.Type == "ArrayNode" {
+		if e.Type == "AssocNode" && k != nil && k.Type == "SymbolNode" && v != nil && v.Type == "ArrayNode" { // an array member `m: [:u32, 8]`
 			els := a.arr(v, "elements")
 			if len(els) != 2 || els[0].Type != "SymbolNode" || els[1].Type != "IntegerNode" {
 				z.add(Rejected, SB024RecordShape, z.pos(a, v), "member %s: an array member is `%s: [:u32, N]` — the element type and a literal length", k.Str["value"], k.Str["value"])
@@ -207,10 +227,11 @@ func (z *analyzer) recordDecl(a *AST, n *Node, structs map[string]*structInfo) {
 		z.add(Rejected, SB024RecordShape, p, "the members of BPF.record(%s, …) (%s) must be the Struct's members in the same order (%s)", c, strings.Join(got, ", "), strings.Join(s.names, ", "))
 		return
 	}
+	// layout: C's natural alignment; implicit padding is rejected (the same shape as mojo's MB019)
 	off, maxAlign, pad := 0, 1, 0
 	for i := range r.Fields {
 		f := &r.Fields[i]
-		sz := f.Bits / 8
+		sz := f.Bits / 8 // the alignment is the size of the element type (arrays too — C's natural layout)
 		if off%sz != 0 {
 			gap := sz - off%sz
 			z.add(Rejected, SB024RecordShape, p, "record %s has %d implicit padding byte(s) before member %s (offset %d, alignment %d) — declare them before %s: %s", c, gap, f.Name, off, sz, f.Name, padHint(off, gap, pad))
@@ -245,6 +266,7 @@ func (z *analyzer) recordDecl(a *AST, n *Node, structs map[string]*structInfo) {
 	z.records[c] = r
 }
 
+// memberNames lists the record's member names (in declaration order).
 func memberNames(r *RecordDecl) string {
 	var ns []string
 	for _, f := range r.Fields {
@@ -253,6 +275,8 @@ func memberNames(r *RecordDecl) string {
 	return strings.Join(ns, ", ")
 }
 
+// inRootOrSample reports whether n is inside the def of an eBPF program or in the sample value of a RecordMap.new (other checks
+// cover those — do not check twice).
 func (z *analyzer) inRootOrSample(a *AST, n *Node, isRoot map[string]bool) bool {
 	for p, ok := a.Parent[n.ID]; ok; p, ok = a.Parent[p] {
 		x := a.node(p)
@@ -269,6 +293,8 @@ func (z *analyzer) inRootOrSample(a *AST, n *Node, isRoot map[string]bool) bool 
 	return false
 }
 
+// padHint lists the `_pad<N>` members that fill a hole of gap bytes starting at offset off (each member naturally aligned — e.g.
+// 3 bytes at offset 1 become `_pad0: :u8, _pad1: :u16`).
 func padHint(off, gap, first int) string {
 	var parts []string
 	for gap > 0 {
@@ -284,6 +310,7 @@ func padHint(off, gap, first int) string {
 	return strings.Join(parts, ", ")
 }
 
+// recordMapDecl reads `C = BPF::RecordMap.new("C", S.new(0, …), n)`.
 func (z *analyzer) recordMapDecl(a *AST, n *Node) {
 	v := a.ref(n, "value")
 	c := n.Str["name"]
@@ -295,7 +322,7 @@ func (z *analyzer) recordMapDecl(a *AST, n *Node) {
 	}
 	as := args(a, v)
 	if len(as) == 3 && as[1].Type == "CallNode" && z.badRecs[constName(a, a.ref(as[1], "receiver"))] {
-		return
+		return // the record declaration was already rejected — do not report twice
 	}
 	if len(as) != 3 || as[0].Type != "StringNode" || as[1].Type != "CallNode" || as[2].Type != "IntegerNode" {
 		z.add(Rejected, SB013MapDeclShape, p, "a record map is declared as `%s = BPF::RecordMap.new(\"%s\", S.new(0, …), max_entries)` with literal arguments", c, c)
@@ -342,12 +369,14 @@ func (z *analyzer) recordMapDecl(a *AST, n *Node) {
 	delete(z.badMaps, c)
 	m := &MapDecl{Const: c, Name: name, Record: r, MaxEntries: entries.Uint64(), Pos: p}
 	if constName(a, a.ref(v, "receiver")) == "BPF::PerCpuRecordMap" {
-		m.Kind, m.Class = "percpu_array", "PerCpuRecordMap"
+		m.Kind, m.Class = "percpu_array", "PerCpuRecordMap" // the per-CPU record map
 	}
 	z.maps[c] = m
 	z.mapOrder = append(z.mapOrder, m)
 }
 
+// checkMemberDefs checks syntactically that the user defines no method named like a record member. This guarantees that, even
+// when Spinel dispatches through a switch or a boxed value, the only candidates are the accessors Struct generates.
 func (z *analyzer) checkMemberDefs(a *AST, fid int, roots []rootDecl) {
 	isRoot := map[string]bool{}
 	for _, r := range roots {
@@ -382,6 +411,8 @@ func (z *analyzer) checkMemberDefs(a *AST, fid int, roots []rootDecl) {
 							splat = true
 						}
 					}
+					// argument count of a user-side S.new(…): catches syntactically a mistake in building it from the Array that map_get
+					// returns (the eBPF side and the sample are checked elsewhere)
 					if !splat && len(args(a, n)) != len(rc.Fields) && !z.inRootOrSample(a, n, isRoot) {
 						z.add(Rejected, SB024RecordShape, z.pos(a, n), "`%s.new` takes all %d members of record %s in the declaration order (%s), got %d — e.g. `%s.new(v[0], …, v[%d])` for `v = obj.map_get(M, k)`", rc.Const, len(rc.Fields), rc.Const, memberNames(rc), len(args(a, n)), rc.Const, len(rc.Fields)-1)
 					}
@@ -411,12 +442,14 @@ func (z *analyzer) checkMemberDefs(a *AST, fid int, roots []rootDecl) {
 	})
 }
 
+// fieldRead reads `p.load.m`; the type, width and interval come from the declaration. A u64 member is Wide (its range does not
+// fit a Ruby Integer, so only a plain copy, `& M` and `>> K` are allowed).
 func (c *progCtx) fieldRead(n, load *Node, refVar string) *Expr {
 	m := c.refMap[refVar]
 	name := n.Str["name"]
 	f := m.Record.Field(name)
 	if f == nil && !memberLike(name) {
-		return nil
+		return nil // p.load.dup, == and the like — lookupCheck's walk rejects them with SB005 (alias)
 	}
 	if f != nil && !f.Pad && !c.loadCallee(load) {
 		return nil
@@ -447,13 +480,17 @@ func (c *progCtx) fieldRead(n, load *Node, refVar string) *Expr {
 	return e
 }
 
+// objectMethods are methods that use the record value itself (an alias shape — SB005). They are not taken as member names.
 var objectMethods = map[string]bool{"dup": true, "clone": true, "freeze": true, "frozen?": true, "to_a": true, "to_h": true, "deconstruct": true,
 	"members": true, "values": true, "each": true, "hash": true, "eql?": true, "equal?": true, "inspect": true, "to_s": true, "size": true, "length": true, "tap": true, "then": true}
 
 var identRe = regexp.MustCompile(`^[a-z_][a-zA-Z0-9_]*$`)
 
+// memberLike reports whether name looks like a member read (an identifier that is not a method using the record value itself).
 func memberLike(name string) bool { return identRe.MatchString(name) && !objectMethods[name] }
 
+// loadCallee checks that `p.load` resolves to RecordRef#load in bpf.rb (member reads and writes are dispatched from the
+// declaration, but load itself is resolved statically).
 func (c *progCtx) loadCallee(load *Node) bool {
 	callee, ok := c.callee(load)
 	if !ok {
@@ -466,16 +503,19 @@ func (c *progCtx) loadCallee(load *Node) bool {
 	return true
 }
 
+// recordCall accepts a record member write (`p.load.m = e`) and `p.atomic_add(:m, d)` as statements. handled reports whether
+// the call had a record shape.
 func (c *progCtx) recordCall(n *Node, refVar string) (Stmt, bool, bool) {
 	recv := c.a.ref(n, "receiver")
 	name := n.Str["name"]
+	// p.load.m[k] = e
 	if name == "[]=" && recv != nil && recv.Type == "CallNode" {
 		if ld := c.a.ref(recv, "receiver"); ld != nil && ld.Type == "CallNode" && ld.Str["name"] == "load" {
 			pv := c.a.ref(ld, "receiver")
 			if pv != nil && pv.Type == "LocalVariableReadNode" && c.refs[pv.Str["name"]] != nil && c.refMap[pv.Str["name"]].Record != nil {
 				ref := pv.Str["name"]
 				if ref != refVar {
-					return Stmt{}, false, false
+					return Stmt{}, false, false // outside the arm — lookupCheck's walk rejects it
 				}
 				m := c.refMap[ref]
 				if !c.loadCallee(ld) {
@@ -494,14 +534,14 @@ func (c *progCtx) recordCall(n *Node, refVar string) (Stmt, bool, bool) {
 					c.add(Rejected, SB002UnsupportedCall, n, "an element write is `%s.load.%s[k] = v`", ref, f.Name)
 					return Stmt{}, false, true
 				}
-				c.noteFlow(as[1], m, n)
-				if !mutation("no-rmw") && !c.exempt(m) && c.readsRefVia(as[1], ref) {
+				c.noteFlow(as[1], m, n)                                               // record where the value comes from (for the cross-function SB019 check)
+				if !mutation("no-rmw") && !c.exempt(m) && c.readsRefVia(as[1], ref) { // read-modify-write of the same entry (the rule works at entry granularity)
 					c.add(Rejected, SB019SharedReadModifyWrite, n, "`%s.load.%s[…] = …` stores a value read from the same map entry — concurrent CPUs lose updates; use `%s.atomic_add(:%s, k, d)`", ref, f.Name, ref, f.Name)
 					return Stmt{}, false, true
 				}
 				k := c.arrayIndex(as[0], f, ref)
 				var ix *Expr
-				if k == -2 {
+				if k == -2 { // a variable index — prove it by its interval and emit ebpf.ref.index
 					if ix = c.varIndex(as[0], f, ref, refVar); ix == nil {
 						return Stmt{}, false, true
 					}
@@ -519,10 +559,14 @@ func (c *progCtx) recordCall(n *Node, refVar string) (Stmt, bool, bool) {
 			}
 		}
 	}
+	// A write through the embedded kernel-struct member path, `t.load.a.m = v`, is rejected by name (a member path is read only —
+	// bpf-mlir also rejects a kfield.store through a path). The statement goes through the recordCall call in progCtx.stmts, not through
+	// the expression's kpathRead (a check placed there never fired).
 	if strings.HasSuffix(name, "=") && name != "==" && name != "!=" && c.kptrPathRecv(recv) {
 		c.add(Rejected, SB033KernelTypeShape, n, "`%s v` writes a kernel struct member through a member path — a member path is read only", name)
 		return Stmt{}, false, true
 	}
+	// p.load.m = e
 	if recv != nil && recv.Type == "CallNode" && recv.Str["name"] == "load" && strings.HasSuffix(name, "=") && name != "==" && name != "!=" {
 		pv := c.a.ref(recv, "receiver")
 		if pv == nil || pv.Type != "LocalVariableReadNode" || c.refs[pv.Str["name"]] == nil || c.refMap[pv.Str["name"]].Record == nil {
@@ -530,7 +574,7 @@ func (c *progCtx) recordCall(n *Node, refVar string) (Stmt, bool, bool) {
 		}
 		ref := pv.Str["name"]
 		if ref != refVar {
-			return Stmt{}, false, false
+			return Stmt{}, false, false // outside the arm — lookupCheck's walk rejects it
 		}
 		m := c.refMap[ref]
 		if !c.loadCallee(recv) {
@@ -548,20 +592,20 @@ func (c *progCtx) recordCall(n *Node, refVar string) (Stmt, bool, bool) {
 		case len(as) != 1:
 			c.add(Rejected, SB002UnsupportedCall, n, "a member write takes one value")
 			return Stmt{}, false, true
-		case as[0].Type == "CallNode" && as[0].Str["name"] == "copy" && c.isKptrRead(c.a.ref(as[0], "receiver")):
+		case as[0].Type == "CallNode" && as[0].Str["name"] == "copy" && c.isKptrRead(c.a.ref(as[0], "receiver")): // r.load.m = t.copy(:f)
 			s, ok := c.kcopyStmt(n, as[0], ref, m, f)
 			return s, ok, true
-		case c.ctxCopyOtherKind(as[0]):
+		case c.ctxCopyOtherKind(as[0]): // a ctx copy in a program that is not a tracepoint
 			return Stmt{}, false, true
-		case c.isTpCopy(as[0]):
+		case c.isTpCopy(as[0]): // r.load.m = ctx.copy(:f)
 			s, ok := c.tpcopyStmt(n, as[0], ref, m, f)
 			return s, ok, true
 		case f.Count > 0:
 			c.add(Rejected, SB024RecordShape, n, "the array member %s is written by element (`%s.load.%s[k] = v`) — not as a whole", f.Name, ref, f.Name)
 			return Stmt{}, false, true
 		}
-		c.noteFlow(as[0], m, n)
-		if !mutation("no-rmw") && !c.exempt(m) && c.readsRefVia(as[0], ref) {
+		c.noteFlow(as[0], m, n)                                               // record where the value comes from (for the cross-function SB019 check)
+		if !mutation("no-rmw") && !c.exempt(m) && c.readsRefVia(as[0], ref) { // reads through locals count too // // per-CPU maps are exempt // mutation control (test builds only): drops the RMW check on record members (the multi-CPU test TestHookRecordMultiCPU) // RMW before the value range (when the range check came first, its SB014 fired first and hid the reason)
 			c.add(Rejected, SB019SharedReadModifyWrite, n, "`%s.load.%s = …` stores a value read from the same map entry — concurrent CPUs lose updates; use `%s.atomic_add(:%s, d)`", ref, f.Name, ref, f.Name)
 			return Stmt{}, false, true
 		}
@@ -571,6 +615,7 @@ func (c *progCtx) recordCall(n *Node, refVar string) (Stmt, bool, bool) {
 		}
 		return Stmt{Kind: "fstore", Var: ref, Map: m, Field: f, Value: v, Pos: c.z.pos(c.a, n)}, true, true
 	}
+	// p.atomic_add(:m, d)
 	if name == "atomic_add" && recv != nil && recv.Type == "LocalVariableReadNode" && c.refs[recv.Str["name"]] != nil && c.refMap[recv.Str["name"]].Record != nil {
 		ref := recv.Str["name"]
 		if ref != refVar {
@@ -603,7 +648,7 @@ func (c *progCtx) recordCall(n *Node, refVar string) (Stmt, bool, bool) {
 			return Stmt{}, false, true
 		}
 		path := ""
-		if f.Count > 0 {
+		if f.Count > 0 { // literal indices only (bpf-mlir has no atomic on a variable-index element — an elem.atomic_add is a candidate)
 			if as[1].Type != "IntegerNode" {
 				c.add(Rejected, SB031IndexRange, as[1], "`%s.atomic_add(:%s, k, d)` needs a literal index — bpf-mlir has no atomic add on a variable-index element; use a per-CPU record map (`BPF::PerCpuRecordMap`, then `%s.load.%s[i] += …` is not shared) or a literal index", ref, f.Name, ref, f.Name)
 				return Stmt{}, false, true
@@ -613,10 +658,10 @@ func (c *progCtx) recordCall(n *Node, refVar string) (Stmt, bool, bool) {
 				return Stmt{}, false, true
 			}
 			path = fmt.Sprintf("%s[%d]", f.Name, k)
-			as = as[1:]
+			as = as[1:] // as[1] is the delta
 		}
-		c.noteFlow(as[1], m, n)
-		if !mutation("no-rmw") && !c.exempt(m) && c.readsRefVia(as[1], ref) {
+		c.noteFlow(as[1], m, n)                                               // record where the value comes from (for the cross-function SB019 check)
+		if !mutation("no-rmw") && !c.exempt(m) && c.readsRefVia(as[1], ref) { // the delta reads the same entry (directly or through a local) — the same entry granularity as p.atomic_add (MapRef) and the per-CPU op=
 			c.add(Rejected, SB019SharedReadModifyWrite, n, "`%s.atomic_add(:%s, …)` adds a value read from the same entry — concurrent CPUs interleave the read and the add; use a delta that does not read `%s`", ref, f.Name, ref)
 			return Stmt{}, false, true
 		}
@@ -629,6 +674,8 @@ func (c *progCtx) recordCall(n *Node, refVar string) (Stmt, bool, bool) {
 	return Stmt{}, false, false
 }
 
+// readsRef reports whether the node contains a read of the borrowed record ref (`ref.load.…`) — a syntactic check, so RMW is
+// seen before the interval check.
 func readsRef(a *AST, n *Node, ref string) bool {
 	found := false
 	walk(a, n, func(x *Node) bool {
@@ -640,6 +687,8 @@ func readsRef(a *AST, n *Node, ref string) bool {
 	return found
 }
 
+// fieldValue is the value stored into a member (its interval must lie in the member type's range — no implicit truncation; a
+// u64 value may only be copied into a u64 member).
 func (c *progCtx) fieldValue(n *Node, f *RecordField, m *MapDecl, refVar string) *Expr {
 	e := c.expr(n, refVar)
 	if e == nil {
@@ -650,7 +699,7 @@ func (c *progCtx) fieldValue(n *Node, f *RecordField, m *MapDecl, refVar string)
 		return nil
 	}
 	if e.Wide {
-		if f.Bits == 64 && !f.Signed && (e.Kind == "load" || e.Kind == "fload" || e.Kind == "ktime" || e.Kind == "pidtgid" || e.Kind == "retval" || e.Kind == "kparg" || e.Kind == "rawarg" || e.Kind == "tpfield" || e.Kind == "gload" || e.Kind == "kfload") {
+		if f.Bits == 64 && !f.Signed && ((e.Kind == "var" && e.Wide) || e.Kind == "load" || e.Kind == "fload" || e.Kind == "ktime" || e.Kind == "pidtgid" || e.Kind == "retval" || e.Kind == "kparg" || e.Kind == "rawarg" || e.Kind == "tpfield" || e.Kind == "gload" || e.Kind == "kfload") {
 			return e
 		}
 		c.valueOK(e, n)
@@ -664,6 +713,8 @@ func (c *progCtx) fieldValue(n *Node, f *RecordField, m *MapDecl, refVar string)
 	return e
 }
 
+// recordUpdate handles `M.update(k, S.new(a, b, …))` (every member as a positional argument — upstream_suspects S5; `_pad<N>`
+// members are the literal 0).
 func (c *progCtx) recordUpdate(n *Node, name string, m *MapDecl, as []*Node, refVar string) (Stmt, bool) {
 	if name != "update" {
 		c.add(Rejected, SB002UnsupportedCall, n, "`%s.%s` is not accepted on a record map — add to a member with `p = %s.lookup(k)`, `if p`, `p.atomic_add(:member, d)`", m.Const, name, m.Const)
@@ -677,14 +728,14 @@ func (c *progCtx) recordUpdate(n *Node, name string, m *MapDecl, as []*Node, ref
 	mk := as[1]
 	for r := range c.refs {
 		if c.refMap[r].Record != nil && mk.Type == "CallNode" && mk.Str["name"] != "new" && readsRef(c.a, mk, r) {
-			return Stmt{}, false
+			return Stmt{}, false // p.load / p.load.dup — lookupCheck's walk rejects them with SB005 (alias)
 		}
 	}
 	if mk.Type != "CallNode" || mk.Str["name"] != "new" || constName(c.a, c.a.ref(mk, "receiver")) != m.Record.Const {
 		c.add(Rejected, SB024RecordShape, mk, "the value of %s.update is `%s.new(…)` with every member", m.Const, m.Record.Const)
 		return Stmt{}, false
 	}
-	if m.Record.HasArray() {
+	if m.Record.HasArray() { // building a record with an array member (record.make) is not accepted yet — write the elements as member writes
 		c.add(Rejected, SB024RecordShape, mk, "record %s has an array member — `%s.new(…)` is not built on the eBPF side yet; write its members with `p = %s.lookup(k)`, `if p`, `p.load.m[k] = v`", m.Record.Const, m.Record.Const, m.Const)
 		return Stmt{}, false
 	}
@@ -699,7 +750,7 @@ func (c *progCtx) recordUpdate(n *Node, name string, m *MapDecl, as []*Node, ref
 		c.add(Rejected, SB024RecordShape, mk, "%s.new must give all %d members explicitly, got %d (an omitted member is nil, which Spinel types as Integer — upstream_suspects S5)", m.Record.Const, len(m.Record.Fields), len(vs))
 		return Stmt{}, false
 	}
-	if c.rmwFirst(n, mk, m, k, func(ref string) string {
+	if c.rmwFirst(n, mk, m, k, func(ref string) string { // check RMW before the value interval (after the shape check SB024)
 		return fmt.Sprintf("`%s.update` stores a value read from the same map (`%s.load`) — concurrent CPUs lose updates (keys must be different literals to accept this form)", m.Name, ref)
 	}) {
 		return Stmt{}, false
@@ -728,7 +779,7 @@ func (c *progCtx) recordUpdate(n *Node, name string, m *MapDecl, as []*Node, ref
 	if k == nil {
 		return Stmt{}, false
 	}
-	if ref, ok := readsMap(e, m); ok && !c.exempt(m) {
+	if ref, ok := readsMap(e, m); ok && !c.exempt(m) { // per-CPU maps are exempt
 		lk := c.refKey[ref]
 		if lk == nil || lk.Kind != "lit" || k.Kind != "lit" || lk.Lit.Cmp(k.Lit) == 0 {
 			c.add(Rejected, SB019SharedReadModifyWrite, n, "`%s.update` stores a value read from the same map (`%s.load`) — concurrent CPUs lose updates (keys must be different literals to accept this form)", m.Name, ref)
@@ -738,10 +789,12 @@ func (c *progCtx) recordUpdate(n *Node, name string, m *MapDecl, as []*Node, ref
 	return Stmt{Kind: "update", Map: m, Key: k, Value: e, Pos: c.z.pos(c.a, n)}, true
 }
 
+// RecordsTable is the embedded layout table (one row `Map|S|size=N;m:off:type;…` per record map, padding members included; ""
+// when there is no record map). The Ruby library uses it to convert between bytes and Struct; the build checks it against the schema.
 func RecordsTable(res *Result) string {
 	var b strings.Builder
 	for _, m := range res.Maps {
-		if m.KeyRecord != nil {
+		if m.KeyRecord != nil { // the record key of a hash map (the row is named `M:key`)
 			b.WriteString(m.Name + ":key|" + m.KeyRecord.Shape() + "\n")
 		}
 		if m.Record != nil {
@@ -751,14 +804,20 @@ func RecordsTable(res *Result) string {
 	for _, r := range res.Rings {
 		b.WriteString(r.Name + "|" + r.Record.Shape() + "\n")
 	}
-	b.WriteString(globalRows(res.Globals))
+	b.WriteString(globalRows(res.Globals)) // global rows: `G|name|section|type|opt`
 	return b.String()
 }
 
+// oneReasonEach reduces the stopping diagnostics to one reason each (so each negative example yields exactly the wanted
+// diagnostics): it drops duplicates with the same position and code; if any other stopping reason exists it drops every injected
+// comparator (SB010) (a shape error disturbs type inference — report the shape first); and if a builtin is reopened (SB016) it
+// drops the resulting operator redefinitions (SB009). Conditional diagnostics are never dropped.
 func oneReasonEach(ds Diags) Diags {
 	stop := func(d Diag) bool { return d.Verdict == Rejected || d.Verdict == Unknown }
 	hasReopen := false
 	other := false
+	// an SB001 / SB002 at the position of an SB027 (Thread on the eBPF side) is the generic rejection of the same reference —
+	// keep only the named SB027
 	threadAt := map[string]bool{}
 	for _, d := range ds {
 		if stop(d) && d.Code == SB016DynamicProgram {
@@ -787,10 +846,14 @@ func oneReasonEach(ds Diags) Diags {
 	return out
 }
 
+// sampleArgs checks the member arguments of a sample value (an integer member is the literal 0; an array member is
+// `Array.new(N, 0)` with N the declared length). where describes a place that does not accept array members ("" means it does).
+// An error is reported as SB024 and returns false.
 func (z *analyzer) sampleArgs(a *AST, sas []*Node, r *RecordDecl, zeroMsg, where string) bool {
 	for i, x := range sas {
 		f := r.Fields[i]
 		if f.Count > 0 {
+			// a :u8 array member of a ring buffer event is accepted (it receives a user string from output_str — other arrays stay rejected)
 			if where != "" && !(where == "a ring buffer event" && f.Bits == 8 && !f.Signed) {
 				z.add(Rejected, SB024RecordShape, z.pos(a, x), "record %s has the array member %s — %s takes records without array members (array members are for record map values)", r.Const, f.Name, where)
 				return false
@@ -824,6 +887,7 @@ func (z *analyzer) sampleArgs(a *AST, sas []*Node, r *RecordDecl, zeroMsg, where
 	return true
 }
 
+// indexHint is the fix suggested for SB031 (with a warning about `& (N−1)` when N is not a power of two).
 func indexHint(n int) string {
 	if n&(n-1) == 0 {
 		return fmt.Sprintf("narrow it into [0, %d] (e.g. `i & %d`, `i %% %d` or inside `if i >= 0 && i < %d`)", n-1, n-1, n, n)
@@ -831,9 +895,11 @@ func indexHint(n int) string {
 	return fmt.Sprintf("narrow it into [0, %d] (e.g. inside `if i >= 0 && i < %d`, or `i %% %d` for a non-negative i — %d is not a power of two, so no mask `i & M` covers exactly [0, %d]: `i & %d` can reach %d)", n-1, n, n, n, n-1, pow2Above(n)-1, pow2Above(n)-1)
 }
 
+// arrayIndex is the index into an array member (only a literal 0..N−1 here; a variable index is handled separately). An error is
+// reported as SB031 and returns -1.
 func (c *progCtx) arrayIndex(x *Node, f *RecordField, ref string) int64 {
 	if x.Type != "IntegerNode" {
-		return -2
+		return -2 // a variable index — the caller proves it by its interval
 	}
 	v, ok := c.z.literal(c.a, x)
 	if !ok {
@@ -846,12 +912,13 @@ func (c *progCtx) arrayIndex(x *Node, f *RecordField, ref string) int64 {
 	return v.Int64()
 }
 
+// elemRead reads `p.load.m[k]` (a constant index into an array member becomes the ref.field.load path `m[k]`).
 func (c *progCtx) elemRead(n, mem, load *Node, refVar string) *Expr {
 	m := c.refMap[refVar]
 	f := m.Record.Field(mem.Str["name"])
 	switch {
 	case f == nil || f.Pad:
-		return c.fieldRead(mem, load, refVar)
+		return c.fieldRead(mem, load, refVar) // a wrong name or padding gets the member-read message
 	case f.Count == 0:
 		c.add(Rejected, SB002UnsupportedCall, n, "member %s of record %s is not an array — `[]` is for array members", f.Name, m.Record.Const)
 		return nil
@@ -865,7 +932,7 @@ func (c *progCtx) elemRead(n, mem, load *Node, refVar string) *Expr {
 	k := c.arrayIndex(args(c.a, n)[0], f, refVar)
 	var e *Expr
 	switch {
-	case k == -2:
+	case k == -2: // a variable index — prove it by its interval and emit ebpf.ref.index
 		ix := c.varIndex(args(c.a, n)[0], f, refVar, refVar)
 		if ix == nil {
 			return nil
@@ -887,6 +954,8 @@ func (c *progCtx) elemRead(n, mem, load *Node, refVar string) *Expr {
 	return e
 }
 
+// varIndex is a variable index expression: if its interval can be shown to lie within [0, N−1] it returns the index Expr,
+// otherwise it reports SB031 and returns nil.
 func (c *progCtx) varIndex(x *Node, f *RecordField, ref, refVar string) *Expr {
 	e := c.expr(x, refVar)
 	if e == nil {
@@ -907,6 +976,7 @@ func (c *progCtx) varIndex(x *Node, f *RecordField, ref, refVar string) *Expr {
 	return e
 }
 
+// pow2Above is the smallest power of two that is at least n.
 func pow2Above(n int) int {
 	p := 1
 	for p < n {

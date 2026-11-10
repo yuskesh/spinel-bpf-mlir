@@ -2,6 +2,18 @@ package frontend
 
 import "math/big"
 
+// The fmod_ret root (a program that can replace a kernel function's return value):
+// `BPF.fmod_ret :name, "kernel_function", nargs: N, args: {i => :type}`.
+// Return values are named only: `BPF::FMOD_CALL` (call the original function — ebpf.verdict "done") and `BPF.fmod_return(e)`
+// (do not call the original function; e becomes the return value — ebpf.return … : i32). e's interval must not contain 0 and must
+// fit in i32 (0 would change the meaning to "call the original function", and truncating to i32 silently changes the Ruby value —
+// both are SB014). An integer as the implicit last expression is SB008.
+// A guard's value (`return BPF.fmod_return(lit) if c`) must be an integer literal — a terminating arith.select at the program's top
+// level picks it (when a guard exists, the last value is a literal too).
+
+// fmodRetDecl reads an fmod_ret declaration. nargs is the target's number of arguments (required — the schema's nargs and the
+// requirements retsig line), args holds integer types only (an index not declared is null), and the return value is i32 (retsig —
+// for a function that does not return i32, the check before load rejects it).
 func (z *analyzer) fmodRetDecl(a *AST, n *Node, as []*Node, bad func(string, ...any) (rootDecl, bool)) (rootDecl, bool) {
 	shape := "`BPF.fmod_ret :name, \"kernel_function\", nargs: N, args: {0 => :i32}`"
 	if len(as) != 3 || as[0].Type != "SymbolNode" || as[1].Type != "StringNode" || as[1].Str["content"] == "" || as[2].Type != "KeywordHashNode" {
@@ -66,10 +78,12 @@ func (z *analyzer) fmodRetDecl(a *AST, n *Node, as []*Node, bad func(string, ...
 	return r, true
 }
 
+// isFmodReturn reports whether n is a call of `BPF.fmod_return(…)`.
 func (c *progCtx) isFmodReturn(n *Node) bool {
 	return n != nil && n.Type == "CallNode" && n.Str["name"] == "fmod_return" && constName(c.a, c.a.ref(n, "receiver")) == "BPF"
 }
 
+// fmodReturnArg checks the callee and the argument count of `BPF.fmod_return(e)` and returns e's node.
 func (c *progCtx) fmodReturnArg(v *Node) *Node {
 	callee, ok := c.callee(v)
 	if !ok {
@@ -83,6 +97,8 @@ func (c *progCtx) fmodReturnArg(v *Node) *Node {
 	return as[0]
 }
 
+// fmodNonZeroI32 reports whether the value's interval excludes 0 and fits in i32 (SB014 — 0 would change the meaning to "call the
+// original function", and truncating to i32 changes the value).
 func (c *progCtx) fmodNonZeroI32(iv Ival, n *Node) bool {
 	if iv.Lo.Sign() <= 0 && iv.Hi.Sign() >= 0 {
 		c.add(Rejected, SB014SemanticGap, n, "the value of `BPF.fmod_return(e)` may be 0 (its range is %s) — 0 means \"call the original function\", so a replaced return value must be provably non-zero; return BPF::FMOD_CALL for that path instead", iv)
@@ -95,6 +111,7 @@ func (c *progCtx) fmodNonZeroI32(iv Ival, n *Node) bool {
 	return true
 }
 
+// fmodVerdict handles `BPF.fmod_return(e)` as the last statement (called from verdict). When a guard exists, e must be a literal (SB006).
 func (c *progCtx) fmodVerdict(n, v *Node) {
 	if c.prog.Kind != "fmod_ret" {
 		c.add(Rejected, SB028TracingKind, v, "`BPF.fmod_return` ends only a fmod_ret program — %s", verdictReturns(c.prog.Kind))
@@ -122,6 +139,7 @@ func (c *progCtx) fmodVerdict(n, v *Node) {
 	c.prog.Verdict, c.prog.FmodVal, c.prog.VerdictPos = "done", e, c.z.pos(c.a, n)
 }
 
+// fmodGuardValue returns the literal of a guard `return BPF.fmod_return(lit) if c`.
 func (c *progCtx) fmodGuardValue(r, v *Node) (*big.Int, bool) {
 	en := c.fmodReturnArg(v)
 	if en == nil {
@@ -138,6 +156,9 @@ func (c *progCtx) fmodGuardValue(r, v *Node) (*big.Int, bool) {
 	return lit, true
 }
 
+// lowerFmodReturn lowers fmod_ret's value-returning terminator: with a guard, `arith.select %fired, <guard value>, <last value> : i32`;
+// without one, the last value — both through `ebpf.return … : i32`. The FMOD_CALL side is the constant 0 (by the kernel's contract
+// this calls the original function — the same value as "done").
 func (l *lowerer) lowerFmodReturn(p *Program) error {
 	last := l.val()
 	if p.FmodVal != nil {
@@ -158,7 +179,7 @@ func (l *lowerer) lowerFmodReturn(p *Program) error {
 		}
 		l.emit("%s = arith.constant %s : i32 %s", g, gv, loc(p.VerdictPos))
 		t, f := g, last
-		if mutation("fmod-select-swap") {
+		if mutation("fmod-select-swap") { // mutation: swap the guard value and the last value
 			t, f = f, t
 		}
 		r = l.val()
@@ -168,6 +189,8 @@ func (l *lowerer) lowerFmodReturn(p *Program) error {
 	return nil
 }
 
+// fmodArgsSchema returns fmod_ret's schema args (length nargs — an index not declared is null, the `-` of the requirements farg
+// line). Without declarations it returns nil.
 func fmodArgsSchema(p *Program) []any {
 	if len(p.TArgs) == 0 {
 		return nil
@@ -179,6 +202,7 @@ func fmodArgsSchema(p *Program) []any {
 	return out
 }
 
+// fmodUses reports whether the program has an fmod_ret terminator that returns a value.
 func fmodUses(p *Program) bool {
 	return p.Kind == "fmod_ret" && (p.FmodVal != nil || p.FmodGuard != nil)
 }

@@ -1,8 +1,8 @@
 require "bpf"
 
-
-
-
+# Paths through embedded members of a kernel struct: from fentry/tcp_sendmsg's sock, its __sk_common (struct sock_common, embedded by value):
+# skc_daddr (destination IPv4, network order), skc_dport (destination port, network order), skc_num (local port, host order) via t.load.a.m
+# (kfield.load with the path "__sk_common.skc_daddr"). For the Filter tgid into Events; on success add 1 to Out[0]
 SockCommon = Struct.new(:skc_daddr, :skc_rcv_saddr, :skc_dport, :skc_num)
 BPF.kernel_type(SockCommon, "sock_common", skc_daddr: :u32, skc_rcv_saddr: :u32, skc_dport: :u16, skc_num: :u16)
 Sock = Struct.new(:__sk_common)

@@ -1,6 +1,6 @@
 require "bpf"
 
-
+# A record map with key and value built from the packet (a shape where the injected-type comparator's additive rule acts on the ctx → window → lookup → p.load flow)
 Seen = Struct.new(:proto, :_pad0, :len, :hits)
 BPF.record(Seen, proto: :u8, _pad0: :u8, len: :u16, hits: :u32)
 Pair = Struct.new(:a, :b)

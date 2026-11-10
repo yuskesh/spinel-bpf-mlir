@@ -1,6 +1,6 @@
 require "bpf"
 
-
+# A helper with ring buffer output: bpf-mlir accepts ringbuf.reserve / submit in an ebpf.func body (called outside loops). Reaching it from a call inside a loop is SB030 (neg/sp_loop_ring.rb)
 
 Tick = Struct.new(:seq, :ts)
 BPF.record(Tick, seq: :u64, ts: :u64)

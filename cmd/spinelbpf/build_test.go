@@ -10,6 +10,7 @@ import (
 	"github.com/yuskesh/spinel-bpf-mlir/internal/toolchain"
 )
 
+// copyExample copies examples/xdpcount/xdpcount.rb into dir (the artefacts go to dir).
 func copyExample(t *testing.T, dir string) string {
 	t.Helper()
 	src, err := os.ReadFile(filepath.Join(repoRoot(), "examples", "xdpcount", "xdpcount.rb"))
@@ -25,8 +26,10 @@ func copyExample(t *testing.T, dir string) string {
 
 var artefacts = []string{"xdpcount.mlir", "xdpcount.schema.json", "xdpcount.maps.json", "xdpcount.domain.json", "xdpcount.bpf.o", "xdpcount.compile_warnings.txt", "xdpcount_embed.S", "xdpcount_embed.o"}
 
+// TestBuildTwice: the artefacts built in two directories are byte-identical (with both --line-info=off and auto).
+// The executable is not part of the condition (this test does not link).
 func TestBuildTwice(t *testing.T) {
-	parallel(t)
+	parallel(t) // needs no exclusive resource
 	cfg, err := defaultConfig()
 	if err != nil {
 		t.Fatal(err)
@@ -52,8 +55,10 @@ func TestBuildTwice(t *testing.T) {
 	}
 }
 
+// TestGoldenArtefacts: the committed artefacts of examples/xdpcount (including the ELF and the embedding object — with the
+// default --line-info=auto) match the build's output.
 func TestGoldenArtefacts(t *testing.T) {
-	parallel(t)
+	parallel(t) // needs no exclusive resource
 	cfg, err := defaultConfig()
 	if err != nil {
 		t.Fatal(err)
@@ -74,6 +79,7 @@ func TestGoldenArtefacts(t *testing.T) {
 	}
 }
 
+// fakeTool is a script that prints a fixed text for --version.
 func fakeTool(t *testing.T, dir, name, version string) string {
 	t.Helper()
 	p := filepath.Join(dir, name)
@@ -81,8 +87,10 @@ func fakeTool(t *testing.T, dir, name, version string) string {
 	return p
 }
 
+// TestWrongVersionsStopBeforeGenerating: with an ebpf-compile / spinel of the wrong version, the build stops without
+// writing any artefact.
 func TestWrongVersionsStopBeforeGenerating(t *testing.T) {
-	parallel(t)
+	parallel(t) // needs no exclusive resource
 	cfg, err := defaultConfig()
 	if err != nil {
 		t.Fatal(err)
@@ -95,12 +103,12 @@ func TestWrongVersionsStopBeforeGenerating(t *testing.T) {
 	}{
 		{"ebpf-compile older release", func(c *Config) {
 			c.EbpfCompile = fakeTool(t, tools, "ec1", "bpf-mlir go/v0.7.0 (commit 5156c9b0e18d904046d455a368b0ec0458382de3)")
-		}, "needs exactly bpf-mlir commit"},
+		}, "needs exactly bpf-mlir commit"}, // the check is against the pinned commit (it used to be "same release")
 		{"ebpf-compile previous release v0.8.0", func(c *Config) {
 			c.EbpfCompile = fakeTool(t, tools, "ec3", "bpf-mlir go/v0.8.0 (commit e973ce8176f5d596d4eb72499887bb82c95a0902)")
 		}, "needs exactly bpf-mlir commit"},
-		{"ebpf-compile dirty", func(c *Config) {
-			c.EbpfCompile = fakeTool(t, tools, "ec2", "bpf-mlir go/v1.19.0-1962-g41b188568-dirty (commit "+toolchain.PinnedCompilerCommit+")")
+		{"ebpf-compile dirty", func(c *Config) { // a dirty build of the pinned commit
+			c.EbpfCompile = fakeTool(t, tools, "ec2", "bpf-mlir go/v1.19.0-2100-g2bf112303-dirty (commit "+toolchain.PinnedCompilerCommit+")")
 		}, "modified or unidentified source"},
 		{"spinel other commit", func(c *Config) { c.Spinel = fakeTool(t, tools, "sp1", "spinel 2026.09.30+1 (deadbeef) [gcc]") }, "pinned to 086d514d"},
 		{"spinel no version line", func(c *Config) { c.Spinel = fakeTool(t, tools, "sp2", "hello") }, "no `spinel <version>"},
@@ -122,8 +130,10 @@ func TestWrongVersionsStopBeforeGenerating(t *testing.T) {
 	}
 }
 
+// TestRefusedProgramWritesOnlyDomainGraph: for a refused program, the build writes only the domain graph (with the
+// verdicts) and not the .mlir or the other artefacts.
 func TestRefusedProgramWritesOnlyDomainGraph(t *testing.T) {
-	parallel(t)
+	parallel(t) // needs no exclusive resource
 	cfg, err := defaultConfig()
 	if err != nil {
 		t.Fatal(err)

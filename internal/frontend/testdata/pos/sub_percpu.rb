@@ -1,6 +1,6 @@
 require "bpf"
 
-
+# A cross-function RMW shape (the caller's lookup read goes to the callee as an argument, the callee updates the same map) is accepted for a per-CPU map (the per-CPU RMW exemption: no two CPUs write one slot at once; judged by the call site's map)
 
 P = BPF::PerCpuArrayMap.new("P", :u64, 4)
 def put(v)

@@ -38,18 +38,22 @@ func TestVerifySpinel(t *testing.T) {
 	}
 }
 
+// TestParseSourceVersion (matching the real file's 3 lines): positive = the real SOURCE_VERSION of the public bpf-mlir
+// v1.22.0 (testdata — byte-identical to the file in the two trees of the public-group export) and the form without a
+// final newline; negative = a missing or different format, the line count, a duplicate, an extra line, the order, the
+// shape of the version and the hex, CR, and the earlier 2-line form.
 func TestParseSourceVersion(t *testing.T) {
-	const c = "41b188568cb36a15d4c185d5f72027267b3fa544"
-	actual, err := os.ReadFile(filepath.Join("testdata", "public_bpf_mlir_v1.21.0.SOURCE_VERSION"))
+	const c = "2bf112303e42e1a176fc8b248948277ef3dfffc0"
+	actual, err := os.ReadFile(filepath.Join("testdata", "public_bpf_mlir_v1.22.0.SOURCE_VERSION"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, s := range []string{string(actual), "format=1\nversion=1.21.0\nsource_commit=" + c} {
-		if v, got, err := ParseSourceVersion([]byte(s)); err != nil || v != "1.21.0" || got != c {
+	for _, s := range []string{string(actual), "format=1\nversion=1.22.0\nsource_commit=" + c} {
+		if v, got, err := ParseSourceVersion([]byte(s)); err != nil || v != "1.22.0" || got != c {
 			t.Fatalf("%q: %s %s %v", s, v, got, err)
 		}
 	}
-	const f, v = "format=1\n", "version=1.21.0\n"
+	const f, v = "format=1\n", "version=1.22.0\n"
 	sc := "source_commit=" + c + "\n"
 	for _, tc := range []struct{ name, in, want string }{
 		{"previous_two_line_form", v + sc, "want exactly 3"},
@@ -62,10 +66,10 @@ func TestParseSourceVersion(t *testing.T) {
 		{"extra_line", f + v + sc + "extra=1\n", "want exactly 3"},
 		{"two_newlines", f + v + sc + "\n", "want exactly 3"},
 		{"swapped", f + sc + v, "line 2"},
-		{"v_prefix", f + "version=v1.21.0\n" + sc, "line 2"},
-		{"short_commit", f + v + "source_commit=41b188568\n", "line 3"},
+		{"v_prefix", f + "version=v1.22.0\n" + sc, "line 2"},
+		{"short_commit", f + v + "source_commit=2bf112303\n", "line 3"},
 		{"upper_hex", f + v + "source_commit=" + strings.ToUpper(c) + "\n", "line 3"},
-		{"crlf", "format=1\r\nversion=1.21.0\r\nsource_commit=" + c + "\r\n", "carriage return"},
+		{"crlf", "format=1\r\nversion=1.22.0\r\nsource_commit=" + c + "\r\n", "carriage return"},
 	} {
 		_, _, err := ParseSourceVersion([]byte(tc.in))
 		if err == nil || !strings.Contains(err.Error(), tc.want) {
@@ -75,8 +79,10 @@ func TestParseSourceVersion(t *testing.T) {
 	}
 }
 
+// TestReleaseSource: how the public form gets check 4's value — in a temporary repo's third_party/bpf-mlir: success, no
+// submodule, only .git, a version mismatch, a malformed file.
 func TestReleaseSource(t *testing.T) {
-	const c = "41b188568cb36a15d4c185d5f72027267b3fa544"
+	const c = "2bf112303e42e1a176fc8b248948277ef3dfffc0"
 	mk := func(sv string, git bool) string {
 		repo := t.TempDir()
 		sub := filepath.Join(repo, "third_party", "bpf-mlir")
@@ -95,17 +101,17 @@ func TestReleaseSource(t *testing.T) {
 		}
 		return repo
 	}
-	good := "format=1\nversion=1.21.0\nsource_commit=" + c + "\n"
-	if got, err := releaseSource(mk(good, true), "v1.21.0"); err != nil || got != c {
+	good := "format=1\nversion=1.22.0\nsource_commit=" + c + "\n"
+	if got, err := releaseSource(mk(good, true), "v1.22.0"); err != nil || got != c {
 		t.Fatalf("checked out: %s %v", got, err)
 	}
-	if got, err := releaseSource(mk(good, false), "v1.21.0"); err != nil || got != c {
+	if got, err := releaseSource(mk(good, false), "v1.22.0"); err != nil || got != c {
 		t.Fatalf("tree without .git: %s %v", got, err)
 	}
-	if got, err := releaseSource(mk("", false), "v1.21.0"); err != nil || got != "" {
+	if got, err := releaseSource(mk("", false), "v1.22.0"); err != nil || got != "" {
 		t.Fatalf("not checked out: %q %v", got, err)
 	}
-	if got, err := releaseSource("", "v1.21.0"); err != nil || got != "" {
+	if got, err := releaseSource("", "v1.22.0"); err != nil || got != "" {
 		t.Fatalf("no repo: %q %v", got, err)
 	}
 	for _, tc := range []struct {
@@ -114,10 +120,10 @@ func TestReleaseSource(t *testing.T) {
 		want     string
 	}{
 		{"git_without_source_version", "", true, "has no SOURCE_VERSION"},
-		{"other_version", "format=1\nversion=1.20.0\nsource_commit=" + c + "\n", true, "says version 1.20.0, but spinelbpf needs the bpf-mlir v1.21.0"},
-		{"previous_two_line_form", "version=1.21.0\nsource_commit=" + c + "\n", true, "want exactly 3"},
+		{"other_version", "format=1\nversion=1.20.0\nsource_commit=" + c + "\n", true, "says version 1.20.0, but spinelbpf needs the bpf-mlir v1.22.0"},
+		{"previous_two_line_form", "version=1.22.0\nsource_commit=" + c + "\n", true, "want exactly 3"},
 	} {
-		got, err := releaseSource(mk(tc.sv, tc.git), "v1.21.0")
+		got, err := releaseSource(mk(tc.sv, tc.git), "v1.22.0")
 		if err == nil || !strings.Contains(err.Error(), tc.want) {
 			t.Errorf("%s: want %q, got %q %v", tc.name, tc.want, got, err)
 		}

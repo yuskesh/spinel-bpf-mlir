@@ -1,6 +1,6 @@
 require "bpf"
 
-
+# An xdp program returns a socket_filter verdict
 def p(ctx)
   BPF::SF_KEEP
 end

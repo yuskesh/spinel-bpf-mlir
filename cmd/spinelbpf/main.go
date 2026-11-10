@@ -1,3 +1,20 @@
+// Command spinelbpf turns the eBPF side of one Ruby (Spinel) program into an ELF with bpf-mlir.
+//
+//	spinelbpf build [--line-info=auto|off] [--emit=domain-graph] [--seam-emit E --seam-inspect I] [-o exe] x.rb
+//
+// --seam-emit / --seam-inspect (opt-in): read the outputs of the spinel-mlir consumer (the 5 files in the E dir, and the
+// domain and the inspection manifest in the I dir) instead of running the Go frontend. The manifest is checked against
+// x.rb's sha256, the bpf-mlir pin and the outputs' sha256.
+// It writes x.mlir, x.schema.json, x.maps.json, x.domain.json, x.bpf.o, x_embed.S and x_embed.o into x.rb's directory.
+// With -o it links the user's program, the C loader's archives (bml) and the embedding object into one executable, and
+// checks its NEEDED entries against packaging/needed.allow.
+// When the ebpf-compile tools are missing, it uses the committed ELF only if the regenerated .mlir, schema and maps.json
+// are the same as the committed ones.
+//
+// Environment variables: SPINEL (default <repo>/third_party/spinel/bin/spinel), EBPF_COMPILE (default
+// <repo>/build/bpf-mlir/bin/ebpf-compile — ebpf-schema-check is in the same directory), LLVM_PREFIX (default
+// /opt/llvm-23.1.1 — for clang), SPINELBPF_LOADER_LIBS (default <repo>/build/bml/lib — the C loader's archives). <repo>
+// is spinelbpf's source repo (SPINELBPF_ROOT overrides it). PATH is not searched.
 package main
 
 import (
@@ -22,6 +39,7 @@ func usage(w io.Writer) {
 	fmt.Fprintln(w, "       spinelbpf --version")
 }
 
+// ecVersion is the bpf-mlir line of ebpf-compile's --version ("" when it is missing or does not run).
 func ecVersion() string {
 	cfg, err := defaultConfig()
 	if err != nil {
@@ -31,7 +49,7 @@ func ecVersion() string {
 	if err != nil {
 		return ""
 	}
-	for _, l := range strings.Split(string(o), "\n") {
+	for _, l := range strings.Split(string(o), "\n") { // `bpf-mlir <version> (commit …)` after the LLVM lines
 		if strings.HasPrefix(l, "bpf-mlir ") {
 			return strings.TrimSpace(l)
 		}
@@ -40,7 +58,7 @@ func ecVersion() string {
 }
 
 func run(args []string, stdout, stderr io.Writer) int {
-	if len(args) == 1 && (args[0] == "--version" || args[0] == "version") {
+	if len(args) == 1 && (args[0] == "--version" || args[0] == "version") { // print the version and the dependency pins
 		fmt.Fprint(stdout, version.Text(ecVersion()))
 		return 0
 	}

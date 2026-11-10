@@ -2,7 +2,7 @@ require "bpf"
 
 Out = BPF::ArrayMap.new("Out", :i64, 4)
 
-
+# x = x * x three times on a u32 value — overflows the range taken in unrolled order (SB014)
 def prog(ctx)
   x = 0
   p = Out.lookup(1)

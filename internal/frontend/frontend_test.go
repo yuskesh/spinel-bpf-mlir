@@ -14,6 +14,9 @@ import (
 
 var wantLine = regexp.MustCompile(`(?m)^# want: (SB\d{3}) (\d+):(\d+)$`)
 
+// TestNegative checks that each file in testdata/neg is stopped with the verdict given by its trailing `# want: SBnnn L:C`.
+// It checks the stop was for the intended reason: every want is present, and every stopping code is one of the want codes
+// (a different code mixed in is a failure).
 func TestNegative(t *testing.T) {
 	sp := testSpinel(t)
 	files, _ := filepath.Glob(filepath.Join("testdata", "neg", "*.rb"))
@@ -26,6 +29,8 @@ func TestNegative(t *testing.T) {
 	}
 }
 
+// checkNegative checks one negative example (with a trailing `# want: SBnnn L:C`); TestNegative and TestUprobeNegative
+// (e080_test.go) share it.
 func checkNegative(t *testing.T, sp Spinel, f string) {
 	text, err := os.ReadFile(f)
 	if err != nil {
@@ -58,6 +63,8 @@ func checkNegative(t *testing.T, sp Spinel, f string) {
 			t.Errorf("stopped for an unintended reason: %s", d)
 		}
 	}
+	// the stopping diagnostics are exactly as many as the want lines (duplicate diagnostics are dropped; this pins, in a test, the
+	// reason priority table in result.go)
 	blocking := 0
 	for _, d := range res.Diags {
 		if d.Verdict == Rejected || d.Verdict == Unknown {
@@ -72,6 +79,7 @@ func checkNegative(t *testing.T, sp Spinel, f string) {
 	}
 }
 
+// TestPositive checks that each file in testdata/pos generates and passes ebpf-opt, ebpf-compile and ebpf-schema-check.
 func TestPositive(t *testing.T) {
 	sp := testSpinel(t)
 	files, _ := filepath.Glob(filepath.Join("testdata", "pos", "*.rb"))
@@ -90,6 +98,7 @@ func TestPositive(t *testing.T) {
 	}
 }
 
+// compileAll runs the outputs through bpf-mlir's tools.
 func compileAll(t *testing.T, out *Output) []byte {
 	t.Helper()
 	bin := filepath.Join(repoRoot(t), "build", "bpf-mlir", "bin")
@@ -118,6 +127,8 @@ func compileAll(t *testing.T, out *Output) []byte {
 	return elf
 }
 
+// TestGoldenExample checks that the committed outputs of examples/xdpcount are byte-identical to the current frontend's output
+// (reproducible outputs — it stops a commit that did not regenerate them).
 func TestGoldenExample(t *testing.T) {
 	root := repoRoot(t)
 	dir := filepath.Join(root, "examples", "xdpcount")
@@ -138,6 +149,7 @@ func TestGoldenExample(t *testing.T) {
 	}
 }
 
+// TestGenerateTwice checks that generating twice from the same source gives byte-identical output (the frontend stage).
 func TestGenerateTwice(t *testing.T) {
 	src := filepath.Join(repoRoot(t), "examples", "xdpcount", "xdpcount.rb")
 	a, err := Generate(testSpinel(t), t.TempDir(), src)
@@ -153,6 +165,8 @@ func TestGenerateTwice(t *testing.T) {
 	}
 }
 
+// TestInjectionWrongClass is a negative control for type injection (giving Spinel the root's argument types): injecting a String
+// argument stops with SB010.
 func TestInjectionWrongClass(t *testing.T) {
 	src := filepath.Join(repoRoot(t), "examples", "xdpcount", "xdpcount.rb")
 	text, _ := os.ReadFile(src)
@@ -165,6 +179,8 @@ func TestInjectionWrongClass(t *testing.T) {
 	}
 }
 
+// TestInjectionComparator is a negative control for the comparator (which compares the types with and without injection): changing
+// one record outside the root in the injected types gives SB010.
 func TestInjectionComparator(t *testing.T) {
 	src := filepath.Join(repoRoot(t), "examples", "xdpcount", "xdpcount.rb")
 	text, _ := os.ReadFile(src)
@@ -183,6 +199,8 @@ func TestInjectionComparator(t *testing.T) {
 	}
 }
 
+// TestDynamicDispatch tests SB004 (not reachable from source in the first accepted subset — receivers are limited to map constants
+// and Spinel dispatches them directly): changing a codegen record to a switch stops it.
 func TestDynamicDispatch(t *testing.T) {
 	src := filepath.Join(repoRoot(t), "examples", "xdpcount", "xdpcount.rb")
 	text, _ := os.ReadFile(src)
@@ -201,6 +219,7 @@ func TestDynamicDispatch(t *testing.T) {
 	}
 }
 
+// TestAmbiguousType tests SB015: giving one node records of two types (specialisation) stops it.
 func TestAmbiguousType(t *testing.T) {
 	src := filepath.Join(repoRoot(t), "examples", "xdpcount", "xdpcount.rb")
 	text, _ := os.ReadFile(src)
@@ -230,6 +249,8 @@ func hasCode(ds Diags, c Code, at string) bool {
 	return false
 }
 
+// TestVerifyWorld checks that the allowed op set is a subset of bpf-mlir's stage 1, that the generated ops are in the allowed set,
+// and that an op outside the set stops.
 func TestVerifyWorld(t *testing.T) {
 	ref, err := ReferenceOps(filepath.Join(repoRoot(t), "third_party", "bpf-mlir", "docs", "reference", "ebpf_ops.md"))
 	if err != nil {
@@ -253,6 +274,9 @@ func TestVerifyWorld(t *testing.T) {
 	}
 }
 
+// TestSameOpsAsMojo checks that the sequence of ops and types in the .mlir of the xdpcount example is the same as in mojo-bpf-mlir's
+// same example (testdata/mojo_xdpcount.mlir — a copy of mojo-bpf-mlir's examples/xdpcount/xdpcount.mlir), ignoring locations,
+// SSA names and program names.
 func TestSameOpsAsMojo(t *testing.T) {
 	norm := func(s string) string {
 		s = regexp.MustCompile(` loc\([^)]*\)`).ReplaceAllString(s, "")
@@ -277,17 +301,23 @@ func TestSameOpsAsMojo(t *testing.T) {
 	}
 }
 
+// TestCodesNamed checks that every reason code has a name.
 func TestCodesNamed(t *testing.T) {
 	var codes []string
 	for c := range codeNames {
 		codes = append(codes, string(c))
 	}
 	sort.Strings(codes)
-	if len(codes) != 36 {
+	if len(codes) != 36 { // SB030 (loops), SB031 (array indices), SB032 (uprobe targets), SB033 (kernel types), SB034 and SB035 (subprograms)
 		t.Fatalf("codes: %v", codes)
 	}
 }
 
+// TestComparatorDependentRule covers a review finding: the comparator's rule "a difference in a node that contains a read of the
+// root's argument is allowed" was added after seeing the first run's results (post hoc). For a program that reads ctx
+// (testdata/neg/ctx_use.rb) it records the list of mismatches the comparator reports without the rule (the differences the rule
+// allows), and checks that with the rule there are 0, and that the rule is not too wide (a difference in a node that contains no
+// ctx read is still SB010).
 func TestComparatorDependentRule(t *testing.T) {
 	sp := testSpinel(t)
 	src := filepath.Join("testdata", "neg", "ctx_use.rb")
@@ -305,6 +335,7 @@ func TestComparatorDependentRule(t *testing.T) {
 			t.Fatalf("with the rule, the comparator still reports %s", d)
 		}
 	}
+	// compare the same two analyses (the types.json of work's plain run and of typing) without the rule
 	load := func(sub string) *Types {
 		data, err := os.ReadFile(filepath.Join(work, sub, "types.json"))
 		if err != nil {
@@ -326,6 +357,9 @@ func TestComparatorDependentRule(t *testing.T) {
 	if len(without) == 0 {
 		t.Fatal("the rule is not needed for ctx_use.rb — the recorded comparison says it was")
 	}
+	// negative control: even in a program that reads ctx, a difference in a node with no ctx read stops with SB010. Since duplicate
+	// diagnostics are dropped, a program that already stops for another reason (ctx_use.rb's SB001) loses its SB010, so this changes the
+	// type of a node outside the flow in pkt_ether, which has no other reason to stop (the IntegerNode 4 at 11:12 — `slot = 4`)
 	src2 := filepath.Join("testdata", "pos", "pkt_ether.rb")
 	text2, _ := os.ReadFile(src2)
 	res2, err := analyze(sp, t.TempDir(), src2, string(text2), analyzeOpts{mutateTyping: func(ty *Types) {
@@ -343,6 +377,8 @@ func TestComparatorDependentRule(t *testing.T) {
 	}
 }
 
+// TestUnusedMapConditional tests a rule added after a first run: a map that is declared but never used is a Conditional SB013 and
+// does not appear in the schema or maps.json.
 func TestUnusedMapConditional(t *testing.T) {
 	out, err := Generate(testSpinel(t), t.TempDir(), filepath.Join("testdata", "pos", "unused_map.rb"))
 	if err != nil {
@@ -356,6 +392,10 @@ func TestUnusedMapConditional(t *testing.T) {
 	}
 }
 
+// TestComparatorAdditiveRule tests a rule added post hoc: a difference in a node that contains a value flowing from the root's
+// argument is allowed only when the side without injection has no type (no record, or untyped). In pkt_ether, changing the typing
+// type of a node in the flow that also has a type on the side without injection (the IfNode of `if w` — Integer) stops with SB010.
+// Without the rule, the differences of the flow's nodes are listed as mismatches.
 func TestComparatorAdditiveRule(t *testing.T) {
 	sp := testSpinel(t)
 	src := filepath.Join("testdata", "pos", "pkt_ether.rb")
@@ -400,6 +440,7 @@ func TestComparatorAdditiveRule(t *testing.T) {
 	}
 }
 
+// TestNoUncheckedPacketLoad checks that an unchecked ebpf.packet.load is not an allowed op (it reads an implicit 0 out of range).
 func TestNoUncheckedPacketLoad(t *testing.T) {
 	for _, op := range AllowedOps() {
 		if op == "ebpf.packet.load" || op == "ebpf.packet.store" {
@@ -411,6 +452,7 @@ func TestNoUncheckedPacketLoad(t *testing.T) {
 	}
 }
 
+// TestPacketReproducible checks that the .mlir and schema of the packet positive examples are byte-identical across two generations.
 func TestPacketReproducible(t *testing.T) {
 	sp := testSpinel(t)
 	files, _ := filepath.Glob(filepath.Join("testdata", "pos", "pkt_*.rb"))
@@ -432,6 +474,11 @@ func TestPacketReproducible(t *testing.T) {
 	}
 }
 
+// TestUntypedSpellingCanary covers a review finding: the comparator's additive condition depends on how Spinel spells "no type"
+// (RBS "untyped" and an empty signature — untypedOnly). On a known input (pkt_ether) it pins that the nodes in the flow on the side
+// without injection (the LocalVariableWriteNode of `w = ctx.check(0, 14)` and the read in `if w`) use that spelling.
+// If a Spinel upgrade changes the spelling, this test fails by name (before the allowance silently disappears, or another spelling
+// is compared as a type).
 func TestUntypedSpellingCanary(t *testing.T) {
 	sp := testSpinel(t)
 	src := filepath.Join("testdata", "pos", "pkt_ether.rb")
@@ -467,6 +514,12 @@ func TestUntypedSpellingCanary(t *testing.T) {
 	}
 }
 
+// TestRecordComparator: in rec_pkt, which has two record types and where the key and value flow from ctx, the comparator without the
+// rule reports mismatches and with the rule reports 0; changing the typing type of a node in the flow that also has a type on the side
+// without injection (the IfNode of `if p` — p is the lookup of a key flowing from ctx) gives SB010 — the additive rule does not
+// silently widen types along the flow of p.load.
+// (The first version used rec_basic — a program that does not read ctx has 0 mismatches with or without injection (injection does not
+// change the types along a record's flow) — and was kept as TestRecordComparatorNoCtx.)
 func TestRecordComparator(t *testing.T) {
 	sp := testSpinel(t)
 	src := filepath.Join("testdata", "pos", "rec_pkt.rb")
@@ -514,15 +567,17 @@ func TestRecordComparator(t *testing.T) {
 	}
 }
 
+// TestRecordReproducible checks that the .mlir, schema and maps.json of the record positive examples are byte-identical across two
+// generations, and that the schema has records and record_ref.
 func TestRecordReproducible(t *testing.T) {
 	sp := testSpinel(t)
 	files, _ := filepath.Glob(filepath.Join("testdata", "pos", "rec_*.rb"))
 	if len(files) == 0 {
 		t.Fatal("no record positives")
 	}
-	files = append(files, filepath.Join("testdata", "pos", "ring_basic.rb"))
-	files = append(files, filepath.Join("testdata", "pos", "hash_basic.rb"))
-	files = append(files, filepath.Join("testdata", "pos", "percpu_basic.rb"))
+	files = append(files, filepath.Join("testdata", "pos", "ring_basic.rb"))   // a ring buffer's record (records holds the ringbuf row's record)
+	files = append(files, filepath.Join("testdata", "pos", "hash_basic.rb"))   // a hash map's record key and value (records lists the key record first)
+	files = append(files, filepath.Join("testdata", "pos", "percpu_basic.rb")) // per-CPU maps
 	for _, f := range files {
 		a, err := Generate(sp, t.TempDir(), f)
 		if err != nil {
@@ -541,6 +596,8 @@ func TestRecordReproducible(t *testing.T) {
 	}
 }
 
+// TestRecordComparatorNoCtx keeps a first-run observation: a record program that does not read ctx (rec_basic) has 0 comparator
+// mismatches with or without injection — injection does not change the types along a record's flow.
 func TestRecordComparatorNoCtx(t *testing.T) {
 	sp := testSpinel(t)
 	src := filepath.Join("testdata", "pos", "rec_basic.rb")
@@ -563,11 +620,17 @@ func TestRecordComparatorNoCtx(t *testing.T) {
 	}
 }
 
+// TestLibraryKeepsEBPFTypes (a gate added from a review finding): adding a user-space side that calls the spinelbpf library's public
+// API does not change Spinel's inferred types inside the eBPF program's defs (the records of typing's types.json — position, kind,
+// name, type), both for a program that uses records and for one that does not.
+// It catches, at the entry, the forms where a polymorphic API or generated splat breaks the eBPF side's types through whole-program
+// inference (earlier, such forms made Spinel emit invalid C: a splat `class.new(*vals)` on a receiver of undetermined type, and
+// member calls for types that never arrive through a polymorphic argument).
 func TestLibraryKeepsEBPFTypes(t *testing.T) {
 	sp := testSpinel(t)
 	cases := []struct {
 		name, user string
-		poison     bool
+		poison     bool // control: a form that breaks the types — a change is expected
 	}{
 		{"rec_basic", `
 require "spinelbpf"
@@ -747,6 +810,8 @@ puts n
 obj.test_run_xdp("prog", 1)
 obj.close
 `, false},
+		// control (the form of the first attempt): building a record's Struct from a polymorphic return value (Array or Integer) changes
+		// the eBPF side's types — this test catches it
 		{"rec_basic", `
 def either(k)
   if k > 0

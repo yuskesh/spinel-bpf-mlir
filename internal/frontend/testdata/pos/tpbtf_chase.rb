@@ -1,7 +1,7 @@
 require "bpf"
 
-
-
+# tp_btf sched_process_fork: chasing pointer fields (t.ptr(:m, T) and the if right after → ebpf.kfield.ptr and ebpf.kptr.check).
+# On forks whose parent tgid is Cfg[0]: the child's real_parent tgid, counts of vfork_done NULL and of mm present, real_parent's mm total_vm (nested if), into Out.
 Mm = Struct.new(:total_vm)
 BPF.kernel_type(Mm, "mm_struct", total_vm: :u64)
 MmT = BPF::KernelType.new(Mm.new(0))

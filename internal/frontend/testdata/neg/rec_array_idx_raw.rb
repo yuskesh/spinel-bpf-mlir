@@ -1,6 +1,6 @@
 require "bpf"
 
-
+# The index is a raw i32 value — range [−2^31, 2^31 − 1]
 Hist = Struct.new(:hist, :n)
 BPF.record(Hist, hist: [:u32, 8], n: :u64)
 Hs = BPF::RecordMap.new("Hs", Hist.new(Array.new(8, 0), 0), 2)

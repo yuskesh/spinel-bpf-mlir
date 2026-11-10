@@ -2,7 +2,7 @@ require "bpf"
 
 Out = BPF::ArrayMap.new("Out", :i64, 4)
 
-
+# The range does not start at 0
 def prog(ctx)
   s = 0
   (1...4).each { |i| s += i }

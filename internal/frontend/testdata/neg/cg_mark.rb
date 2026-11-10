@@ -1,6 +1,6 @@
 require "bpf"
 
-
+# The cgroup_skb context field mark (not in the capability table)
 Out = BPF::ArrayMap.new("Out", :u32, 1)
 
 def p(skb)

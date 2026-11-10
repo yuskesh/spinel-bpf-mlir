@@ -2,10 +2,19 @@ package frontend
 
 import "fmt"
 
+// The comm (command name) of the current task (bpf-mlir's ebpf.task.comm, helper 16): `r = R.output_comm(Ev.new(…), :comm, :status)`
+// followed directly by `if r` (reading `r.status` inside), or `_ = R.output_comm(…)` — the same binding and lowering as output_str
+// (the Comm form of "ostr"). The comm member is exactly [:u8, 16] (TASK_COMM_LEN; other lengths are not accepted, because they would
+// leave the meaning of truncation and of the trailing zeros to the kernel version), and the status member is :i64 with a literal 0
+// in Ev.new (the op writes it). The program kind is not restricted (whether the helper is available is decided by the load gate).
+
+// outputCommShape is the sentence showing the shape of output_comm (how to fix an error message).
 func outputCommShape(r *RingDecl) string {
 	return fmt.Sprintf("`r = %s.output_comm(%s.new(…), :<[:u8, 16] member>, :<i64 status member>)` then `if r` (read `r.status` inside), or `_ = %s.output_comm(…)`", r.Const, r.Record.Const, r.Const)
 }
 
+// hasComm reports whether a program body contains output_comm (for the harness's `comm` command: the kernel harness uses
+// prctl(PR_SET_NAME), the twin — the same program run natively in Ruby — uses BPF.set_comm).
 func hasComm(res *Result) bool {
 	var in func(ss []Stmt) bool
 	in = func(ss []Stmt) bool {
@@ -24,6 +33,7 @@ func hasComm(res *Result) bool {
 	return false
 }
 
+// outputComm checks `R.output_comm(S.new(…), :comm, :status)` and builds a Stmt "ostr" (Comm).
 func (c *progCtx) outputComm(call *Node, name, refVar string) (Stmt, bool) {
 	r := c.ringOf(c.a.ref(call, "receiver"))
 	callee, ok := c.callee(call)

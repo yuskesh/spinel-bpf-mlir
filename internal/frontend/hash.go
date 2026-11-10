@@ -4,10 +4,17 @@ import (
 	"fmt"
 )
 
+// Hash-family maps: `M = BPF::HashMap.new("M", key, value, n)` (integer values) / `BPF::RecordHashMap.new(…)` (record values),
+// and the two LRU classes. key and value are an integer type's Symbol or a sample record. The write operations (update / insert /
+// replace / delete / add_or_init) return a status (i64 — 0 or a negative errno), and discarding it is SB026. The declaring class
+// is split by the kind of value: with a single class, lookup's return value is polymorphic between MapRef and RecordRef and
+// Spinel's inferred types break (a probe showed Spinel's --emit-rbs typing a single class's lookup as `(Integer) -> untyped` just
+// because it had two return paths, even when every map had integer values).
+
 type hashClass struct {
-	kind   string
-	record bool
-	class  string
+	kind   string // the schema kind ("hash" / "lru_hash")
+	record bool   // record values
+	class  string // the class name in bpf.rb
 }
 
 var hashClasses = map[string]hashClass{
@@ -15,14 +22,20 @@ var hashClasses = map[string]hashClass{
 	"BPF::LruHashMap":          {"lru_hash", false, "LruHashMap"},
 	"BPF::RecordHashMap":       {"hash", true, "RecordHashMap"},
 	"BPF::LruRecordHashMap":    {"lru_hash", true, "LruRecordHashMap"},
-	"BPF::PerCpuHashMap":       {"percpu_hash", false, "PerCpuHashMap"},
+	"BPF::PerCpuHashMap":       {"percpu_hash", false, "PerCpuHashMap"}, // per-CPU
 	"BPF::PerCpuRecordHashMap": {"percpu_hash", true, "PerCpuRecordHashMap"},
 }
 
+// valueCounterpart maps a class to the class of the same kind with the other kind of value (for the hint in declaration errors).
 var valueCounterpart = map[string]string{"HashMap": "RecordHashMap", "RecordHashMap": "HashMap", "LruHashMap": "LruRecordHashMap", "LruRecordHashMap": "LruHashMap", "PerCpuHashMap": "PerCpuRecordHashMap", "PerCpuRecordHashMap": "PerCpuHashMap"}
 
+// perCPUExempt reports whether a per-CPU map is exempt from SB019: the map is per-CPU and every program kind is xdp.
+// No two CPUs write the same slot at once (a test run runs under migrate_disable, and XDP runs in softirq), but a tracing
+// (kprobe, fentry) or perf program can interrupt XDP's softirq on the same CPU — so a single non-XDP kind removes the exemption
+// (this closes, at the entry, the way the exemption would silently leak when a program kind is added). kinds is every program
+// root kind (a superset of the programs that use the map — conservative).
 func perCPUExempt(m *MapDecl, kinds []string) bool {
-	if m != nil && mutation("percpu-exempt-all") {
+	if m != nil && mutation("percpu-exempt-all") { // mutation control (test builds only): leak the exemption to shared maps
 		return true
 	}
 	if m == nil || !m.PerCPU() || len(kinds) == 0 {
@@ -36,14 +49,19 @@ func perCPUExempt(m *MapDecl, kinds []string) bool {
 	return true
 }
 
+// exempt is progCtx's per-CPU exemption (over every program root kind).
 func (c *progCtx) exempt(m *MapDecl) bool { return perCPUExempt(m, c.z.rootKinds) }
 
+// statusOps maps the hash operations that return a status to try_update's flags ("delete" is try_delete; "add_or_init" is expanded).
 var statusOps = map[string]string{"update": "any", "insert": "noexist", "replace": "exist", "delete": "delete", "add_or_init": "add_or_init"}
 
+// errnoConsts are bpf.rb's status constants (negative errnos — a test checks them against bpf.rb's values and CRuby's Errno).
 var errnoConsts = map[string]int64{"BPF::ENOENT": -2, "BPF::E2BIG": -7, "BPF::ENOMEM": -12, "BPF::EEXIST": -17}
 
+// intTypes are the integer type Symbols (8- and 16-bit types are excluded).
 var intTypes = map[string][2]int{"u32": {32, 0}, "u64": {64, 0}, "i32": {32, 1}, "i64": {64, 1}}
 
+// sampleRecord reads `S.new(0, …)` (a sample of a declared record — every member the literal 0). An error is SB024 and returns nil.
 func (z *analyzer) sampleRecord(a *AST, x *Node) *RecordDecl {
 	sc := constName(a, a.ref(x, "receiver"))
 	r := z.records[sc]
@@ -62,6 +80,7 @@ func (z *analyzer) sampleRecord(a *AST, x *Node) *RecordDecl {
 	return r
 }
 
+// hashMapDecl reads a top-level `C = BPF::HashMap.new("C", key, value, n)` (and the other three classes).
 func (z *analyzer) hashMapDecl(a *AST, n *Node, hc hashClass) {
 	v := a.ref(n, "value")
 	c := n.Str["name"]
@@ -75,7 +94,7 @@ func (z *analyzer) hashMapDecl(a *AST, n *Node, hc hashClass) {
 	as := args(a, v)
 	for _, x := range as {
 		if x.Type == "CallNode" && z.badRecs[constName(a, a.ref(x, "receiver"))] {
-			return
+			return // the record declaration was already rejected — do not report it twice
 		}
 	}
 	shape := "`" + c + " = BPF::" + hc.class + ".new(\"" + c + "\", key, value, max_entries)` with literal arguments — key is :u32 / :u64 / :i32 / :i64 or a record sample `S.new(0, …)`"
@@ -154,6 +173,8 @@ func (z *analyzer) hashMapDecl(a *AST, n *Node, hc hashClass) {
 	z.mapOrder = append(z.mapOrder, m)
 }
 
+// statusCall reports whether n is a hash map operation that returns a status (`M.insert(…)` and so on). For a hash map whose
+// declaration was rejected, it returns bad (the use is not reported a second time).
 func (c *progCtx) statusCall(n *Node) (m *MapDecl, bad, ok bool) {
 	if n == nil || n.Type != "CallNode" {
 		return nil, false, false
@@ -175,6 +196,7 @@ func (c *progCtx) statusCall(n *Node) (m *MapDecl, bad, ok bool) {
 	return m, false, true
 }
 
+// statusParentOK reports whether the status call n sits in an accepted place (an assignment to a local, or an operand of a comparison).
 func (c *progCtx) statusParentOK(n *Node) bool {
 	p := c.a.node(c.a.Parent[n.ID])
 	if p != nil && p.Type == "LocalVariableWriteNode" && c.a.ref(p, "value") == n {
@@ -186,10 +208,13 @@ func (c *progCtx) statusParentOK(n *Node) bool {
 	return p != nil && p.Type == "CallNode" && cmpOps[p.Str["name"]]
 }
 
+// statusIgnored is the wording of SB026 (it lists the accepted forms).
 func statusIgnored(m *MapDecl, op string) string {
 	return "the status of `" + m.Const + "." + op + "` (0 or a negative errno such as BPF::EEXIST) is dropped — receive it as `st = " + m.Const + "." + op + "(…)` and read `st`, compare it (`if " + m.Const + "." + op + "(…) != 0`), or drop it explicitly with `_ = " + m.Const + "." + op + "(…)`"
 }
 
+// statusLocalOK enforces the rule for the local in `st = M.op(…)`: this is the only assignment to that name, and it is read at least
+// once (this closes off a status that is never read and a status lost by being overwritten).
 func (c *progCtx) statusLocalOK(w *Node, m *MapDecl, op string) bool {
 	name := w.Str["name"]
 	writes, reads := 0, 0
@@ -207,7 +232,7 @@ func (c *progCtx) statusLocalOK(w *Node, m *MapDecl, op string) bool {
 	})
 	switch {
 	case writes != 1 && c.statusReported[name]:
-		return false
+		return false // the same name was reported once, at its first assignment
 	case writes != 1:
 		c.statusReported[name] = true
 		c.add(Rejected, SB026StatusIgnored, w, "`%s` holds the status of `%s.%s` but is assigned %d times — a status local is assigned once (give each status its own name, so none is overwritten before it is read)", name, m.Const, op, writes)
@@ -219,6 +244,7 @@ func (c *progCtx) statusLocalOK(w *Node, m *MapDecl, op string) bool {
 	return true
 }
 
+// statusExpr is the value of an operation that returns a status (i64 — its interval is all of i64: no errno range is assumed).
 func (c *progCtx) statusExpr(n *Node, m *MapDecl, refVar string) *Expr {
 	name := n.Str["name"]
 	if name == "add_or_init" && m.Record != nil {
@@ -246,7 +272,7 @@ func (c *progCtx) statusExpr(n *Node, m *MapDecl, refVar string) *Expr {
 		return nil
 	}
 	k := c.key(as[0], m, refVar)
-	if want == 2 && !mutation("no-rmw") && c.rmwFirst(n, as[1], m, k, func(ref string) string {
+	if want == 2 && !mutation("no-rmw") && c.rmwFirst(n, as[1], m, k, func(ref string) string { // the read-modify-write (RMW) check comes before the value's interval
 		if name == "add_or_init" {
 			return fmt.Sprintf("`%s.add_or_init` adds a value read from the same map (`%s.load`) — concurrent CPUs interleave the read and the add; use a delta that does not read %s", m.Name, ref, m.Const)
 		}
@@ -271,7 +297,7 @@ func (c *progCtx) statusExpr(n *Node, m *MapDecl, refVar string) *Expr {
 	if k == nil {
 		return nil
 	}
-	if ref, ok := readsMap(v, m); ok && !mutation("no-rmw") && !c.exempt(m) {
+	if ref, ok := readsMap(v, m); ok && !mutation("no-rmw") && !c.exempt(m) { // per-CPU maps are exempt // no-rmw: mutation control (test builds only — a non-atomic RMW)
 		lk := c.refKey[ref]
 		if lk == nil || lk.Kind != "lit" || k.Kind != "lit" || lk.Lit.Cmp(k.Lit) == 0 {
 			c.add(Rejected, SB019SharedReadModifyWrite, n, "`%s.%s` stores a value read from the same map (`%s.load`) — concurrent CPUs lose updates; use `%s.add_or_init` or `%s.atomic_add` inside `if %s`", m.Name, name, ref, m.Const, ref, ref)
@@ -281,11 +307,13 @@ func (c *progCtx) statusExpr(n *Node, m *MapDecl, refVar string) *Expr {
 	return &Expr{Kind: "hstatus", Op: statusOps[name], Map: m, Args: []*Expr{k, v}, Iv: fullI64, Pos: c.z.pos(c.a, n)}
 }
 
+// hashKey reads a hash map key: an integer expression (in the declared type's range) or an `S.new(…)` written directly as the call's
+// argument (record.make — padding is 0).
 func (c *progCtx) hashKey(n *Node, m *MapDecl, refVar string) *Expr {
 	if m.KeyRecord != nil {
 		if n.Type == "CallNode" && n.Str["name"] == "new" && constName(c.a, c.a.ref(n, "receiver")) == m.KeyRecord.Const {
 			e := c.recordMake(n, m.KeyRecord, &MapDecl{Name: m.Name, Record: m.KeyRecord}, refVar)
-			if e != nil && mutation("hash-key-swap") && len(e.Args) >= 2 {
+			if e != nil && mutation("hash-key-swap") && len(e.Args) >= 2 { // mutation control (test builds only): swap the first two members of a record key
 				e.Args[0], e.Args[1] = e.Args[1], e.Args[0]
 			}
 			return e
@@ -313,10 +341,12 @@ func (c *progCtx) hashKey(n *Node, m *MapDecl, refVar string) *Expr {
 	return e
 }
 
+// intRange is an integer type's range (for u64 the upper limit is Ruby's Integer limit, 2^63−1).
 func intRange(bits int, signed bool) Ival {
 	return typeRange(&MapDecl{ValueBits: bits, Signed: signed})
 }
 
+// refAtomic handles `p.atomic_add(d)` on a borrowed integer value (inside present — only where the key exists; ebpf.ref.atomic_add).
 func (c *progCtx) refAtomic(n *Node, refVar string) (Stmt, bool, bool) {
 	recv := c.a.ref(n, "receiver")
 	if n.Str["name"] != "atomic_add" || recv == nil || recv.Type != "LocalVariableReadNode" || c.refs[recv.Str["name"]] == nil || c.refMap[recv.Str["name"]].Record != nil {
@@ -324,7 +354,7 @@ func (c *progCtx) refAtomic(n *Node, refVar string) (Stmt, bool, bool) {
 	}
 	ref := recv.Str["name"]
 	if ref != refVar {
-		return Stmt{}, false, false
+		return Stmt{}, false, false // outside the arm — lookupCheck's walk rejects it
 	}
 	m := c.refMap[ref]
 	if m.IsLpm() {
@@ -344,8 +374,8 @@ func (c *progCtx) refAtomic(n *Node, refVar string) (Stmt, bool, bool) {
 		c.add(Rejected, SB002UnsupportedCall, n, "`%s.atomic_add` takes one delta (`%s.atomic_add(d)`)", ref, ref)
 		return Stmt{}, false, true
 	}
-	c.noteFlow(as[0], c.refMap[ref], n)
-	if c.readsRefVia(as[0], ref) {
+	c.noteFlow(as[0], c.refMap[ref], n) // record where the value comes from (SB019 across functions)
+	if c.readsRefVia(as[0], ref) {      // also through the locals it was derived from
 		c.add(Rejected, SB019SharedReadModifyWrite, n, "`%s.atomic_add` adds a value read from the same entry — use a delta that does not read `%s`", ref, ref)
 		return Stmt{}, false, true
 	}
@@ -356,6 +386,9 @@ func (c *progCtx) refAtomic(n *Node, refVar string) (Stmt, bool, bool) {
 	return Stmt{Kind: "ratomic", Var: ref, Map: m, Value: d, Pos: c.z.pos(c.a, n)}, true, true
 }
 
+// perCPUAdd handles `p.load.m += d` / `-= d` on a member of a per-CPU record (load → add → store on the current CPU's slot — the same
+// meaning as the kernel's addition, which wraps at the width). When the exemption does not hold or the map is not per-CPU, it sets
+// handled to false and leaves SB019 to the caller.
 func (c *progCtx) perCPUAdd(n *Node, refVar string) (Stmt, bool, bool) {
 	recv := c.a.ref(n, "receiver")
 	if n.Type != "CallOperatorWriteNode" || recv == nil || recv.Type != "CallNode" || recv.Str["name"] != "load" {
@@ -371,7 +404,7 @@ func (c *progCtx) perCPUAdd(n *Node, refVar string) (Stmt, bool, bool) {
 		return Stmt{}, false, false
 	}
 	if ref != refVar {
-		return Stmt{}, false, false
+		return Stmt{}, false, false // outside the arm — lookupCheck's walk rejects it
 	}
 	op := n.Str["binary_operator"]
 	if op != "+" && op != "-" {
@@ -391,8 +424,8 @@ func (c *progCtx) perCPUAdd(n *Node, refVar string) (Stmt, bool, bool) {
 		return Stmt{}, false, true
 	}
 	vn := c.a.ref(n, "value")
-	c.noteFlow(vn, m, n)
-	if c.readsRefVia(vn, ref) {
+	c.noteFlow(vn, m, n)        // record where the value comes from (SB019 across functions)
+	if c.readsRefVia(vn, ref) { // also through the locals it was derived from
 		c.add(Rejected, SB019SharedReadModifyWrite, n, "the delta of `%s.load.%s %s= …` reads the same entry — use a delta that does not read `%s`", ref, f.Name, op, ref)
 		return Stmt{}, false, true
 	}

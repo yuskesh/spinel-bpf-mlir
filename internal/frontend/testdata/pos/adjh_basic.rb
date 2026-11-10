@@ -1,6 +1,6 @@
 require "bpf"
 
-
+# XDP adjust_head: delta is D[0] (set by the user or harness); the status goes to Out[0]; after the move, a new check rereads the head into Out[1] / Out[2]
 D = BPF::ArrayMap.new("D", :i32, 1)
 Out = BPF::ArrayMap.new("Out", :i64, 3)
 

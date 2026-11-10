@@ -1,7 +1,7 @@
 require "bpf"
 
-
-
+# tp_btf sched_pi_setprio: a nullable struct argument (`1 => [:or_null, TaskT]` with ctx.kptr_or_null and if → ebpf.kptr.check).
+# When tsk's tgid is Cfg[0]: counts of calls with pi_task present and absent, and the last pi_task's pid, into Out.
 Task = Struct.new(:pid, :tgid)
 BPF.kernel_type(Task, "task_struct", pid: :i32, tgid: :i32)
 TaskT = BPF::KernelType.new(Task.new(0, 0))

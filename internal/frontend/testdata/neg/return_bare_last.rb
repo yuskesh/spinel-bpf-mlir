@@ -1,6 +1,6 @@
 require "bpf"
 
-
+# Found while adding early returns: a bare return as the last statement — the frontend used to read nil and panic (present from the start), now SB008
 
 Out = BPF::ArrayMap.new("Out", :u64, 1)
 

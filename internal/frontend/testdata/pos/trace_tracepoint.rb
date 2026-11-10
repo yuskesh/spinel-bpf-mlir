@@ -1,8 +1,8 @@
 require "bpf"
 
-
-
-
+# tracepoint: syscalls/sys_enter_write's __syscall_nr, fd and count (offsets and types from the 7.1.8 tracefs format; checked before load).
+# Only for the Filter tgid with fd's low 32 bits 900: add 1 to Out[0], Out[1] = __syscall_nr, add count's low 32 bits to Out[2]
+# (the same shape as bpf-mlir's own sys_enter_write test; our own stdout / stderr writes are excluded by fd, other processes by tgid)
 Filter = BPF::ArrayMap.new("Filter", :u32, 1)
 Out = BPF::ArrayMap.new("Out", :i64, 3)
 

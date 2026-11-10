@@ -1,6 +1,6 @@
 require "bpf"
 
-
+# Write to a flow_dissector window (windows are read-only)
 def p(ctx)
   w = ctx.check(14, 20)
   if w

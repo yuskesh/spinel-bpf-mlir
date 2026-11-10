@@ -1,7 +1,7 @@
 require "bpf"
 
-
-
+# A kernel struct array member into a ring event: tp_btf/sched_process_fork, only forks whose parent tgid is Cfg[0],
+# into Events {comm: a 16-byte copy of the child's comm (a ring reservation as ebpf.kfield.copy's destination), pid: the child's pid}
 Task = Struct.new(:pid, :tgid, :comm)
 BPF.kernel_type(Task, "task_struct", pid: :i32, tgid: :i32, comm: [:u8, 16])
 TaskT = BPF::KernelType.new(Task.new(0, 0, Array.new(16, 0)))

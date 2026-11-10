@@ -7,41 +7,61 @@ import (
 	"strings"
 )
 
+// eBPF-side subprograms: a top-level Ruby def becomes a static ebpf.func, and a call to it becomes ebpf.call.
+//
+// Accepted shape: `def f(a, b)` (0 to 5 required positional parameters), called as a receiverless `f(x)` from a program root (or
+// from another callee). Parameters and the return value are Integers (i64). The last expression is the return value (early
+// returns are not accepted).
+//
+// Intervals: a parameter's interval is the union of the argument intervals over all call sites; the caller sees the return value
+// as the full i64 range. Programs are analysed first, then each callee exactly once in topological order of the static call graph
+// (after all of its callers).
+//
+// Provenance across functions (SB019): the mark `@p<i>` for the origin of callee parameter i and the mark `@r<site>` for the
+// result of a call flow into the local provenance (derivedRefs), and the origins of map writes, return values and call arguments
+// are recorded as "flows". After all analyses, summaries are built callee-first (reverse topological order) — W (the map writes
+// that parameter i reaches) and R (the map reads that reach the return value, and the parameters relayed to it) — and the
+// callers' call sites and writes are judged against them (resolveSubprograms).
+
+// funcInfo is one eBPF-side subprogram.
 type funcInfo struct {
 	Name      string
 	Def       *Node
 	Params    []string
-	Decl      int
-	ArgIv     []Ival
+	Decl      int    // declaration order (the order in the output)
+	ArgIv     []Ival // union of the argument intervals over all call sites (nil when there is no call site)
 	Path      []string
-	Prog      *Program
-	Bad       bool
-	Called    bool
-	BorrowIdx int
-	BorrowMap *MapDecl
-	WinIdx    int
-	WinLen    int64
-	CtxIdx    int
-	CtxKind   string
-	shapeErr  string
-	W         map[int]map[string]bool
-	RMaps     map[string]bool
+	Prog      *Program                // the analysis result (Kind "func")
+	Bad       bool                    // shape error or recursion — not analysed
+	Called    bool                    // has a call site (from an analysed caller)
+	BorrowIdx int                     // position of the borrowed parameter (-1 if none — at most one)
+	BorrowMap *MapDecl                // the borrowed map (the same at every call site)
+	WinIdx    int                     // position of the window parameter (-1 if none)
+	WinLen    int64                   // window length N (the same at every call site)
+	CtxIdx    int                     // position of the context parameter (-1 if none)
+	CtxKind   string                  // the context's kind (xdp / sched_cls — the same at every call site)
+	shapeErr  string                  // shape error of the def (SB034 only when reached from a root — user-space defs are not checked)
+	W         map[int]map[string]bool // the write targets that parameter i's value reaches (`m:<map>`, `g:<Counter>`)
+	RMaps     map[string]bool         // the reads that reach the return value (same keys)
 	RParam    map[int]bool
 }
 
+// flowSrc is a value's resolved origin: the maps the caller looked up, callee parameters, and call-result sites.
 type flowSrc struct {
-	Maps   map[string]bool
+	Maps   map[string]bool // what was read (a lookup of `m:<map>`, the value of `g:<Counter>`)
 	Params map[int]bool
 	Rets   map[int]bool
 }
 
+// flow is a value's flow into a map write (Sink) or into the return value (Sink nil).
 type flow struct {
 	Src  flowSrc
-	Sink string
+	Sink string // write target (`m:<map>`, `g:<Counter>`); "" is the return value
 	Pos  Pos
 	Path []string
 }
 
+// callSite is one call.
 type callSite struct {
 	ID     int
 	Caller string
@@ -51,11 +71,13 @@ type callSite struct {
 	Path   []string
 }
 
+// fnFlows holds the flows and call sites of one function (a program or a callee).
 type fnFlows struct {
 	flows []flow
 	sites []*callSite
 }
 
+// scanSubprograms turns each top-level def that is not a root into a funcInfo and checks its shape (SB034).
 func (z *analyzer) scanSubprograms(a *AST, defs map[string]*Node, roots []rootDecl) {
 	z.funcs = map[string]*funcInfo{}
 	z.flowsOf = map[string]*fnFlows{}
@@ -97,6 +119,7 @@ func (z *analyzer) scanSubprograms(a *AST, defs map[string]*Node, roots []rootDe
 	}
 }
 
+// userCall returns the subprogram when n is a call to an eBPF-side subprogram (a receiverless `f(…)`), else nil.
 func (z *analyzer) userCall(a *AST, n *Node) *funcInfo {
 	if n == nil || n.Type != "CallNode" || a.ref(n, "receiver") != nil {
 		return nil
@@ -104,6 +127,8 @@ func (z *analyzer) userCall(a *AST, n *Node) *funcInfo {
 	return z.funcs[n.Str["name"]]
 }
 
+// callGraph builds the static call graph (following receiverless calls from roots and callees). Recursion is SB035 (with its
+// path). It returns the topological order (callers first).
 func (z *analyzer) callGraph(a *AST, defs map[string]*Node, roots []rootDecl) []*funcInfo {
 	callees := map[string][]string{}
 	edgeFrom := func(name string) []string {
@@ -124,6 +149,7 @@ func (z *analyzer) callGraph(a *AST, defs map[string]*Node, roots []rootDecl) []
 		callees[name] = out
 		return out
 	}
+	// recursion (cycles) — the DFS path
 	state := map[string]int{}
 	var stack []string
 	reported := map[string]bool{}
@@ -165,6 +191,7 @@ func (z *analyzer) callGraph(a *AST, defs map[string]*Node, roots []rootDecl) []
 			dfs(r.Name)
 		}
 	}
+	// topological order (Kahn's algorithm — reached callees only, callers first, ties in declaration order)
 	indeg := map[string]int{}
 	reach := map[string]bool{}
 	for n := range state {
@@ -203,11 +230,11 @@ func (z *analyzer) callGraph(a *AST, defs map[string]*Node, roots []rootDecl) []
 			}
 		}
 	}
-	for n := range reach {
+	for n := range reach { // shape of each reached def (SB034) and its Spinel signature (arguments and value must be Integer)
 		fi := z.funcs[n]
 		if rec, cnt := z.typing.Types.TypeOf(a, fi.Def); !fi.Bad && fi.shapeErr == "" && cnt == 1 && !integerSig(rec.Signature) {
 			hint := sigHint(rec.Signature)
-			if strings.HasSuffix(rec.Signature, "-> untyped") {
+			if strings.HasSuffix(rec.Signature, "-> untyped") { // arithmetic on a record member as the last expression leaves Spinel without a type (the same class as an operator whose receiver is a record member being typed as polymorphic)
 				hint = "; if the last expression is arithmetic on a record member, assign it to a local first (`x = r.load.m & 0xFF` then `x`)"
 			}
 			fi.shapeErr = fmt.Sprintf("Spinel types the eBPF-side function `%s` as %s — its arguments and its value must be Integer (no true / false, nil or other types)%s", fi.Name, rec.Signature, hint)
@@ -222,9 +249,10 @@ func (z *analyzer) callGraph(a *AST, defs map[string]*Node, roots []rootDecl) []
 			z.anyBadFunc = true
 		}
 	}
-	return order
+	return order // callees on a cycle are left out (Bad)
 }
 
+// fn is the flow record of the progCtx's function.
 func (c *progCtx) fn() *fnFlows {
 	f := c.z.flowsOf[c.name]
 	if f == nil {
@@ -234,6 +262,7 @@ func (c *progCtx) fn() *fnFlows {
 	return f
 }
 
+// resolveSrc resolves the node's origins (derivedRefs) into maps, parameters and call sites.
 func (c *progCtx) resolveSrc(n *Node) flowSrc {
 	s := flowSrc{Maps: map[string]bool{}, Params: map[int]bool{}, Rets: map[int]bool{}}
 	for r := range c.derivedRefs(n) {
@@ -244,7 +273,7 @@ func (c *progCtx) resolveSrc(n *Node) flowSrc {
 		case strings.HasPrefix(r, "@r"):
 			i, _ := strconv.Atoi(r[2:])
 			s.Rets[i] = true
-		case strings.HasPrefix(r, "@g"):
+		case strings.HasPrefix(r, "@g"): // a read of a Counter's value
 			s.Maps["g:"+r[2:]] = true
 		case c.refMap[r] != nil:
 			s.Maps["m:"+c.refMap[r].Name] = true
@@ -253,6 +282,8 @@ func (c *progCtx) resolveSrc(n *Node) flowSrc {
 	return s
 }
 
+// noteFlow records the origin of the value node written to map m (m nil means the return value), for SB019 across functions —
+// resolveSubprograms makes the decision.
 func (c *progCtx) noteFlow(val *Node, m *MapDecl, at *Node) {
 	k := ""
 	if m != nil {
@@ -261,6 +292,7 @@ func (c *progCtx) noteFlow(val *Node, m *MapDecl, at *Node) {
 	c.noteFlowKey(val, k, at)
 }
 
+// noteFlowKey records a value's flow into the write target key k (`m:<map>`, `g:<Counter>`; "" is the return value).
 func (c *progCtx) noteFlowKey(val *Node, k string, at *Node) {
 	if val == nil || c.z.flowsOf == nil {
 		return
@@ -268,6 +300,7 @@ func (c *progCtx) noteFlowKey(val *Node, k string, at *Node) {
 	c.fn().flows = append(c.fn().flows, flow{Src: c.resolveSrc(val), Sink: k, Pos: c.z.pos(c.a, at), Path: c.path()})
 }
 
+// path is the path shown in diagnostics (a program's name; for a callee, the first path that reached it).
 func (c *progCtx) path() []string {
 	if c.fpath != nil {
 		return c.fpath
@@ -275,9 +308,12 @@ func (c *progCtx) path() []string {
 	return []string{c.name}
 }
 
+// subCall handles `f(x, …)`, a call to an eBPF-side subprogram: arguments are Integers (i64 — booleans and Wide u64 values are
+// rejected) and the result is the full i64 range (the caller does not use the return value's interval). It adds the call site's
+// intervals to the union of the callee's parameter intervals and records the arguments' origins.
 func (c *progCtx) subCall(n *Node, fi *funcInfo, refVar string) *Expr {
 	if fi.Bad {
-		return nil
+		return nil // a shape error or recursion was reported at the declaration (not repeated at the call)
 	}
 	callee, ok := c.callee(n)
 	if !ok {
@@ -299,7 +335,7 @@ func (c *progCtx) subCall(n *Node, fi *funcInfo, refVar string) *Expr {
 	e := &Expr{Kind: "call", Var: fi.Name, Iv: fullI64, Pos: c.z.pos(c.a, n)}
 	var srcs []flowSrc
 	borrows := 0
-	special := 0
+	special := 0 // number of non-Integer arguments (borrow, window, ctx) — at most one
 	for i, x := range as {
 		if x.Type == "LocalVariableReadNode" && (c.refs[x.Str["name"]] != nil || c.wins[x.Str["name"]] != nil || (c.param != "" && x.Str["name"] == c.param)) {
 			special++
@@ -308,7 +344,7 @@ func (c *progCtx) subCall(n *Node, fi *funcInfo, refVar string) *Expr {
 				return nil
 			}
 		}
-		if x.Type == "LocalVariableReadNode" && c.wins[x.Str["name"]] != nil {
+		if x.Type == "LocalVariableReadNode" && c.wins[x.Str["name"]] != nil { // a checked packet window
 			wn := x.Str["name"]
 			n := c.wins[wn].len
 			switch {
@@ -324,13 +360,13 @@ func (c *progCtx) subCall(n *Node, fi *funcInfo, refVar string) *Expr {
 			srcs = append(srcs, flowSrc{Maps: map[string]bool{}, Params: map[int]bool{}, Rets: map[int]bool{}})
 			continue
 		}
-		if c.param != "" && c.isVarRead(x, c.param) {
+		if c.param != "" && c.isVarRead(x, c.param) { // the context
 			k := c.ctxKindOf()
 			switch {
 			case c.prog.Kind == "func":
 				c.add(Rejected, SB034SubprogramShape, x, "the context argument `%s` is not forwarded to another eBPF-side function in this stage — check the packet here", c.param)
 				return nil
-			case !hasPacket(k) || k == "cgroup_skb":
+			case !hasPacket(k) || k == "cgroup_skb": // the cgroup_skb context is not passed either (a cgroup_skb context in an ebpf.func has not been measured)
 				c.add(Rejected, SB034SubprogramShape, x, "the %s context is not passed to an eBPF-side function — its reads depend on the attach point; read the values in the program and pass Integers", k)
 				return nil
 			case fi.CtxIdx >= 0 && (fi.CtxIdx != i || fi.CtxKind != k):
@@ -342,7 +378,7 @@ func (c *progCtx) subCall(n *Node, fi *funcInfo, refVar string) *Expr {
 			srcs = append(srcs, flowSrc{Maps: map[string]bool{}, Params: map[int]bool{}, Rets: map[int]bool{}})
 			continue
 		}
-		if x.Type == "LocalVariableReadNode" && c.refs[x.Str["name"]] != nil {
+		if x.Type == "LocalVariableReadNode" && c.refs[x.Str["name"]] != nil { // a borrowed map value as argument
 			ref := x.Str["name"]
 			m := c.refMap[ref]
 			borrows++
@@ -359,7 +395,7 @@ func (c *progCtx) subCall(n *Node, fi *funcInfo, refVar string) *Expr {
 			}
 			fi.BorrowIdx, fi.BorrowMap = i, m
 			e.Args = append(e.Args, &Expr{Kind: "refarg", Ref: ref, Map: m, Pos: c.z.pos(c.a, x)})
-			srcs = append(srcs, flowSrc{Maps: map[string]bool{}, Params: map[int]bool{}, Rets: map[int]bool{}})
+			srcs = append(srcs, flowSrc{Maps: map[string]bool{}, Params: map[int]bool{}, Rets: map[int]bool{}}) // the borrow itself is not a read of a value
 			continue
 		}
 		v := c.expr(x, refVar)
@@ -397,12 +433,14 @@ func (c *progCtx) subCall(n *Node, fi *funcInfo, refVar string) *Expr {
 	return e
 }
 
+// function analyses one callee (after all of its callers — a parameter's interval is the union over the call sites).
 func (z *analyzer) function(a *AST, fi *funcInfo) *Program {
 	d := fi.Def
 	c := &progCtx{z: z, a: a, t: z.typing.Types, def: d, name: fi.Name, fpath: fi.Path, refs: map[string]*Node{}, statusReported: map[string]bool{}, refMap: map[string]*MapDecl{}, refKey: map[string]*Expr{}, wins: map[string]*winInfo{},
 		used: map[*MapDecl]bool{}, usedGlobals: map[*GlobalDecl]bool{}, usedRings: map[*RingDecl]bool{}, badBind: map[string]bool{}, ostrs: map[string]bool{}, ostrLive: map[string]bool{}, kptrs: map[string]*KernelTypeDecl{}, kchecked: map[string]bool{}, poisoned: map[string]bool{}, skipIfs: map[int]bool{}, env: map[string]*varInfo{}, blockLocals: map[string]bool{}}
 	c.prog = &Program{Name: fi.Name, Kind: "func", Pos: z.pos(a, d), EndLine: d.EndLine, FParams: fi.Params, FBorrow: fi.BorrowIdx, FBorrowMap: fi.BorrowMap, FWin: fi.WinIdx, FWinLen: fi.WinLen, FCtx: fi.CtxIdx, FCtxKind: fi.CtxKind}
 	before := len(z.diags)
+	// shape: early returns and verdict constants (those belong to a program body only)
 	bad := false
 	walk(a, d, func(x *Node) bool {
 		if bad {
@@ -423,15 +461,15 @@ func (z *analyzer) function(a *AST, fi *funcInfo) *Program {
 	}
 	refVar := ""
 	for i, p := range fi.Params {
-		if i == fi.WinIdx {
+		if i == fi.WinIdx { // the window parameter is a checked window (the whole body is in_range)
 			c.wins[p] = &winInfo{len: fi.WinLen, active: true}
 			continue
 		}
-		if i == fi.CtxIdx {
+		if i == fi.CtxIdx { // the context parameter (a packet kind — ctx.check in the body)
 			c.param, c.ctxKind = p, fi.CtxKind
 			continue
 		}
-		if i == fi.BorrowIdx {
+		if i == fi.BorrowIdx { // the borrowed parameter is a present borrow (the whole body is the present region)
 			c.refs[p] = a.arr(a.ref(d, "parameters"), "requireds")[i]
 			c.refMap[p] = fi.BorrowMap
 			c.refKey[p] = nil
@@ -504,6 +542,8 @@ func (z *analyzer) function(a *AST, fi *funcInfo) *Program {
 	return c.prog
 }
 
+// isStmtOnlyCall reports whether n is a statement-only call (a map's update / atomic_add, a Counter's add and the like) — such
+// a call is not taken as a function's last expression.
 func (c *progCtx) isStmtOnlyCall(n *Node) bool {
 	r := c.a.ref(n, "receiver")
 	if r == nil || r.Type != "ConstantReadNode" {
@@ -516,11 +556,13 @@ func (c *progCtx) isStmtOnlyCall(n *Node) bool {
 	return c.z.globals[r.Str["name"]] != nil && name == "add"
 }
 
+// resolveSubprograms runs after all analyses: it builds the summaries W / R callee-first (reverse topological order) and decides
+// SB019 across functions.
 func (z *analyzer) resolveSubprograms(order []*funcInfo, programs []*Program) {
 	if z.flowsOf == nil {
 		return
 	}
-	noSummary := mutation("no-summary")
+	noSummary := mutation("no-summary") // mutation control (test builds only): empty summaries
 	reported := map[string]bool{}
 	report := func(p Pos, path []string, msg string) {
 		k := p.String() + msg
@@ -536,6 +578,7 @@ func (z *analyzer) resolveSubprograms(order []*funcInfo, programs []*Program) {
 			sitesByID[s.ID] = s
 		}
 	}
+	// expand expands an origin into (maps read, relayed parameters, maps read through a call result)
 	var expand func(src flowSrc, depth int) (map[string]bool, map[int]bool, map[string]bool)
 	expand = func(src flowSrc, depth int) (map[string]bool, map[int]bool, map[string]bool) {
 		maps, params, viaRet := map[string]bool{}, map[int]bool{}, map[string]bool{}
@@ -578,7 +621,7 @@ func (z *analyzer) resolveSubprograms(order []*funcInfo, programs []*Program) {
 	for _, m := range z.mapOrder {
 		byName[m.Name] = m
 	}
-	exempt := func(k string) bool { return strings.HasPrefix(k, "m:") && perCPUExempt(byName[k[2:]], z.rootKinds) }
+	exempt := func(k string) bool { return strings.HasPrefix(k, "m:") && perCPUExempt(byName[k[2:]], z.rootKinds) } // Counters are not exempt (.bss is shared by all CPUs)
 	objName := func(k string) string {
 		if strings.HasPrefix(k, "g:") {
 			return "Counter " + k[2:]
@@ -590,7 +633,7 @@ func (z *analyzer) resolveSubprograms(order []*funcInfo, programs []*Program) {
 		if f == nil {
 			return
 		}
-		for _, s := range f.sites {
+		for _, s := range f.sites { // caller's read → argument → callee's write, and parameter relays
 			g := s.Callee
 			if noSummary {
 				continue
@@ -614,7 +657,7 @@ func (z *analyzer) resolveSubprograms(order []*funcInfo, programs []*Program) {
 		}
 		for _, fl := range f.flows {
 			maps, params, viaRet := expand(fl.Src, 0)
-			if fl.Sink == "" {
+			if fl.Sink == "" { // the return value
 				if fi != nil {
 					for m := range maps {
 						fi.RMaps[m] = true
@@ -625,7 +668,7 @@ func (z *analyzer) resolveSubprograms(order []*funcInfo, programs []*Program) {
 				}
 				continue
 			}
-			if viaRet[fl.Sink] && !exempt(fl.Sink) {
+			if viaRet[fl.Sink] && !exempt(fl.Sink) { // caller's write ← the callee's read reaching its return value (the caller's side)
 				report(fl.Pos, fl.Path, fmt.Sprintf("the value written to %s comes from an eBPF-side function that reads %s — concurrent CPUs lose updates across the call; use atomic_add on the entry with a delta that does not read it", objName(fl.Sink), objName(fl.Sink)))
 			}
 			if fi != nil {
@@ -638,7 +681,7 @@ func (z *analyzer) resolveSubprograms(order []*funcInfo, programs []*Program) {
 			}
 		}
 	}
-	for i := len(order) - 1; i >= 0; i-- {
+	for i := len(order) - 1; i >= 0; i-- { // callees first
 		process(order[i].Name, order[i])
 	}
 	for _, p := range programs {
@@ -646,10 +689,13 @@ func (z *analyzer) resolveSubprograms(order []*funcInfo, programs []*Program) {
 	}
 }
 
+// withFuncs returns the programs and the subprograms (for collecting the maps, rings and globals they use).
 func withFuncs(res *Result) []*Program {
 	return append(append([]*Program{}, res.Programs...), res.Funcs...)
 }
 
+// integerSig reports whether a def's Spinel signature `(Integer, Integer) -> Integer` is Integer in every argument and in the
+// value (an empty signature is not judged here — the analysis checks it).
 func integerSig(sig string) bool {
 	if sig == "" {
 		return true
@@ -661,7 +707,7 @@ func integerSig(sig string) bool {
 	if inner := sig[1:j]; inner != "" {
 		refs := 0
 		for _, p := range strings.Split(inner, ", ") {
-			if p == "MapRef" || p == "RecordRef" || p == "Window" || p == "XdpMd" || p == "SkBuff" {
+			if p == "MapRef" || p == "RecordRef" || p == "Window" || p == "XdpMd" || p == "SkBuff" { // a borrow, a window or a packet context (at most one non-Integer argument)
 				refs++
 				continue
 			}
@@ -676,6 +722,8 @@ func integerSig(sig string) bool {
 	return sig[j+5:] == "Integer"
 }
 
+// callsBadFunc reports whether n contains a call to a rejected subprogram (shape error or recursion); if so the expression is not
+// analysed (so nothing is reported on top of the diagnostic at the declaration).
 func (c *progCtx) callsBadFunc(n *Node) bool {
 	if !c.z.anyBadFunc {
 		return false
@@ -690,6 +738,8 @@ func (c *progCtx) callsBadFunc(n *Node) bool {
 	return bad
 }
 
+// ringPath is the path from subprogram f (following calls) to a ring buffer output (nil if none is reached — bpf-mlir rejects a
+// call inside a loop whose callee transitively reaches a ring buffer op).
 func (c *progCtx) ringPath(f *funcInfo, seen map[string]bool) []string {
 	if seen[f.Name] {
 		return nil
@@ -715,11 +765,13 @@ func (c *progCtx) ringPath(f *funcInfo, seen map[string]bool) []string {
 	return out
 }
 
+// borrowParam reports whether ref is the borrowed parameter of the current subprogram (for the forwarding check).
 func (c *progCtx) borrowParam(ref string) bool {
 	fi := c.z.funcs[c.name]
 	return fi != nil && fi.BorrowIdx >= 0 && fi.BorrowIdx < len(fi.Params) && fi.Params[fi.BorrowIdx] == ref
 }
 
+// borrowArgUse reports whether x (a read of a borrowed local) is an argument of a call to an eBPF-side subprogram.
 func (c *progCtx) borrowArgUse(x *Node) bool {
 	p := c.a.node(c.a.Parent[x.ID])
 	if p == nil || p.Type != "ArgumentsNode" {
@@ -728,11 +780,14 @@ func (c *progCtx) borrowArgUse(x *Node) bool {
 	return c.z.userCall(c.a, c.a.node(c.a.Parent[p.ID])) != nil
 }
 
+// winParam reports whether wn is the window parameter of the current subprogram (for the forwarding check).
 func (c *progCtx) winParam(wn string) bool {
 	fi := c.z.funcs[c.name]
 	return fi != nil && fi.WinIdx >= 0 && fi.WinIdx < len(fi.Params) && fi.Params[fi.WinIdx] == wn
 }
 
+// ctxKindOf is the context's kind (for a program its own kind; for a subprogram the kind of the context it received, or "func"
+// if none).
 func (c *progCtx) ctxKindOf() string {
 	if c.prog != nil && c.prog.Kind == "func" {
 		if c.ctxKind != "" {
@@ -746,6 +801,8 @@ func (c *progCtx) ctxKindOf() string {
 	return c.prog.Kind
 }
 
+// sigHint explains why a signature is not accepted: two or more non-Integer arguments, a tracing context, or an argument whose
+// type differs between calls (untyped).
 func sigHint(sig string) string {
 	j := strings.Index(sig, ") -> ")
 	if !strings.HasPrefix(sig, "(") || j < 0 {
@@ -756,7 +813,7 @@ func sigHint(sig string) string {
 		switch p {
 		case "MapRef", "RecordRef", "Window", "XdpMd", "SkBuff":
 			special++
-		case "FentryCtx", "FexitCtx", "KprobeCtx", "UprobeCtx", "TpBtfCtx", "KretprobeCtx", "UretprobeCtx", "RawTpCtx", "SocketFilterCtx", "TracepointCtx", "KsyscallCtx":
+		case "FentryCtx", "FexitCtx", "KprobeCtx", "UprobeCtx", "TpBtfCtx", "KretprobeCtx", "UretprobeCtx", "RawTpCtx", "SocketFilterCtx", "TracepointCtx", "KsyscallCtx": // the socket_filter context is not passed either
 			tracing = p
 		case "untyped":
 			untyped = true

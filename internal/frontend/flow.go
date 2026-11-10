@@ -2,9 +2,11 @@ package frontend
 
 import "math/big"
 
+// flowField is the width and element count of an integer field of struct bpf_flow_keys (from the bpf_flow_keys rows of bpf-mlir's
+// UAPI table, KernelABITable.inc).
 type flowField struct {
 	Bits  int
-	Count int
+	Count int // 1 (no index) or 4 (ipv6_src / ipv6_dst — a constant index 0..3)
 }
 
 var flowFields = map[string]flowField{
@@ -13,6 +15,8 @@ var flowFields = map[string]flowField{
 	"flags": {32, 1}, "flow_label": {32, 1},
 }
 
+// flowFieldArgs reads the field and index of `ctx.key(:f[, i])` / `ctx.set_key(:f, [i,] v)`. as holds the field and index arguments
+// (not the value). With no index the index is −1.
 func (c *progCtx) flowFieldArgs(n *Node, as []*Node, what string) (string, flowField, int64, bool) {
 	if len(as) < 1 || as[0].Type != "SymbolNode" {
 		c.add(Rejected, SB002UnsupportedCall, n, "`%s.%s` takes the flow key's name as a Symbol literal (`:nhoff`, `:ipv4_src`, `:ipv6_src` with an index …)", c.param, what)
@@ -43,6 +47,7 @@ func (c *progCtx) flowFieldArgs(n *Node, as []*Node, what string) (string, flowF
 	return name, f, idx, true
 }
 
+// flowKeyRead lowers `ctx.key(:f[, i])` (ebpf.flow_keys.load; the value is unsigned, of the field's width).
 func (c *progCtx) flowKeyRead(n *Node, refVar string) *Expr {
 	callee, ok := c.callee(n)
 	if !ok {
@@ -59,6 +64,8 @@ func (c *progCtx) flowKeyRead(n *Node, refVar string) *Expr {
 	return &Expr{Kind: "fkload", Field: &RecordField{Name: name, Bits: f.Bits}, Idx: idx, Iv: widthRange(f.Bits, false), Pos: c.z.pos(c.a, n)}
 }
 
+// flowKeyStore lowers the statement `ctx.set_key(:f, [i,] v)` (ebpf.flow_keys.store). The range of v must fit the field's width as an
+// unsigned value (otherwise SB014 — it is never truncated silently).
 func (c *progCtx) flowKeyStore(n *Node, refVar string) (Stmt, bool) {
 	callee, ok := c.callee(n)
 	if !ok {

@@ -1,6 +1,6 @@
 require "bpf"
 
-
+# An RMW shape across a borrow helper (the caller's read goes to the helper as an integer argument, the helper writes the borrowed member) is accepted for a per-CPU record map (the per-CPU RMW exemption, judged by the call site's map)
 
 Stat = Struct.new(:hits, :last)
 BPF.record(Stat, hits: :u64, last: :u64)

@@ -1,8 +1,8 @@
 require "bpf"
 
-
-
-
+# The address of a checked kernel pointer (bpf-mlir's ebpf.kptr.addr): fentry blk_mq_start_request uses q.addr of the request (present q) as
+# the Starts key, writes a Filter-tgid start's {addr, sector: __sector, len: __data_len} into Last[0], the start count into Out[0]. fentry blk_mq_end_request:
+# an end inside the Filter window whose key is in Starts goes to Out[1] (join), otherwise Out[2] (another request's end). NVMe batch completion skips blk_mq_end_request
 Rq = Struct.new(:__data_len, :__sector)
 BPF.kernel_type(Rq, "request", __data_len: :u32, __sector: :u64)
 RqT = BPF::KernelType.new(Rq.new(0, 0))

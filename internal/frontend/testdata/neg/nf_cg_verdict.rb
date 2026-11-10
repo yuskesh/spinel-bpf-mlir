@@ -1,6 +1,6 @@
 require "bpf"
 
-
+# netfilter returns a cgroup_skb verdict
 def p(ctx)
   BPF::CG_ALLOW
 end

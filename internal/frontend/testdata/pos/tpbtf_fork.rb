@@ -1,7 +1,7 @@
 require "bpf"
 
-
-
+# tp_btf sched_process_fork: on forks whose parent tgid is Cfg[0], the child's pid, tgid, start_time (u64), migration_disabled (u16),
+# rcu_tasks_holdout (u8) into Out (the same fields as bpf-mlir's kfield width test).
 Task = Struct.new(:pid, :tgid, :start_time, :migration_disabled, :rcu_tasks_holdout)
 BPF.kernel_type(Task, "task_struct", pid: :i32, tgid: :i32, start_time: :u64, migration_disabled: :u16, rcu_tasks_holdout: :u8)
 TaskT = BPF::KernelType.new(Task.new(0, 0, 0, 0, 0))

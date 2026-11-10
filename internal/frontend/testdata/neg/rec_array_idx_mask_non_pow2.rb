@@ -1,6 +1,6 @@
 require "bpf"
 
-
+# i & 7 on an array with N 5 — [0, 7] does not fit in [0, 4]
 Hist = Struct.new(:hist, :n)
 BPF.record(Hist, hist: [:u32, 5], n: :u32)
 Hs = BPF::RecordMap.new("Hs", Hist.new(Array.new(5, 0), 0), 2)

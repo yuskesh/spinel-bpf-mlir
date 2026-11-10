@@ -6,6 +6,11 @@ import (
 	"strings"
 )
 
+// ring buffer: `C = BPF::RingBuf.new("C", S.new(0, …), size)` and, on the eBPF side, `C.output(S.new(…))`.
+// The result of output (whether the reservation succeeded) is accepted only as an if / unless condition or as `_ = …` — a
+// statement that drops it, a bool local, an && operand or an argument is SB025.
+
+// RingDecl is a ring buffer declaration.
 type RingDecl struct {
 	Const  string
 	Name   string
@@ -14,18 +19,19 @@ type RingDecl struct {
 	Pos    Pos
 }
 
+// ringDecl reads a top-level `C = BPF::RingBuf.new("C", S.new(0, …), size)`.
 func (z *analyzer) ringDecl(a *AST, n *Node) {
 	v := a.ref(n, "value")
 	c := n.Str["name"]
 	p := z.pos(a, n)
-	z.badRings[c] = true
+	z.badRings[c] = true // once rejected, the uses get nothing on top (rule 1 of the reason priority on Code)
 	if _, dup := z.maps[c]; dup || z.rings[c] != nil {
 		z.add(Rejected, SB013MapDeclShape, p, "constant %s is assigned twice", c)
 		return
 	}
 	as := args(a, v)
 	if len(as) == 3 && as[1].Type == "CallNode" && z.badRecs[constName(a, a.ref(as[1], "receiver"))] {
-		return
+		return // the record declaration was already rejected — do not report twice
 	}
 	if len(as) == 3 && as[0].Type == "StringNode" && as[2].Type == "IntegerNode" && as[1].Type != "CallNode" {
 		z.add(Rejected, SB024RecordShape, z.pos(a, as[1]), "the sample must be `S.new(0, …)` of a record S declared with BPF.record")
@@ -85,6 +91,7 @@ func (z *analyzer) ringDecl(a *AST, n *Node) {
 	z.ringOrder = append(z.ringOrder, d)
 }
 
+// ringOf returns the ring buffer when the receiver is the constant of a declared ring buffer, else nil.
 func (c *progCtx) ringOf(recv *Node) *RingDecl {
 	if recv == nil || recv.Type != "ConstantReadNode" {
 		return nil
@@ -92,15 +99,19 @@ func (c *progCtx) ringOf(recv *Node) *RingDecl {
 	return c.z.rings[recv.Str["name"]]
 }
 
+// isOutput reports whether n is `R.output(…)` with R a ring buffer.
 func (c *progCtx) isOutput(n *Node) bool {
 	return n != nil && n.Type == "CallNode" && n.Str["name"] == "output" && c.ringOf(c.a.ref(n, "receiver")) != nil
 }
 
+// outputOfBadRing reports whether n is an output of a ring buffer whose declaration was rejected (the use is not rejected again —
+// rule 1 of the reason priority on Code).
 func (c *progCtx) outputOfBadRing(n *Node) bool {
 	recv := c.a.ref(n, "receiver")
 	return n != nil && n.Type == "CallNode" && (n.Str["name"] == "output" || n.Str["name"] == "output_str") && recv != nil && recv.Type == "ConstantReadNode" && c.z.badRings[recv.Str["name"]]
 }
 
+// ringOutput is the value of `R.output(S.new(…))` (a bool — whether the reservation succeeded).
 func (c *progCtx) ringOutput(n *Node, refVar string) *Expr {
 	r := c.ringOf(c.a.ref(n, "receiver"))
 	callee, ok := c.callee(n)
@@ -116,7 +127,7 @@ func (c *progCtx) ringOutput(n *Node, refVar string) *Expr {
 		c.add(Rejected, SB002UnsupportedCall, n, "`%s.output` takes one event (`%s.new(…)`)", r.Const, r.Record.Const)
 		return nil
 	}
-	c.ringMake = true
+	c.ringMake = true // only the record.make of a ring output accepts `t.copy(:m)` for an array member
 	mk := c.recordMake(as[0], r.Record, &MapDecl{Name: r.Name, Record: r.Record}, refVar)
 	c.ringMake = false
 	if mk == nil {
@@ -126,6 +137,9 @@ func (c *progCtx) ringOutput(n *Node, refVar string) *Expr {
 	return &Expr{Kind: "ringout", Ring: r, Args: []*Expr{mk}, Bool: true, Pos: c.z.pos(c.a, n)}
 }
 
+// ringCopy handles `t.copy(:m)` for an array member in the record.make of a ring output (bpf-mlir's kfield.copy with a
+// reservation as the destination): in the record.make it is 0 (zarr), and lowering copies into the reservation after
+// store_record and before submit. t is a present kernel pointer; m is an N-byte array in t's struct, with N the same as the member's.
 func (c *progCtx) ringCopy(x *Node, f *RecordField, rec *RecordDecl) (*Expr, bool) {
 	if !c.ringMake || x.Type != "CallNode" || x.Str["name"] != "copy" {
 		return nil, false
@@ -162,6 +176,8 @@ func (c *progCtx) ringCopy(x *Node, f *RecordField, rec *RecordDecl) (*Expr, boo
 	return &Expr{Kind: "zarr", Var: t, Op: d.Name, Path: kf.Name, Field: f, Pos: c.z.pos(c.a, x)}, true
 }
 
+// recordMake builds the record.make expression of `S.new(a, b, …)` (every member as a positional argument; `_pad<N>` members are
+// the literal 0).
 func (c *progCtx) recordMake(mk *Node, rec *RecordDecl, m *MapDecl, refVar string) *Expr {
 	if mk.Type != "CallNode" || mk.Str["name"] != "new" || constName(c.a, c.a.ref(mk, "receiver")) != rec.Const {
 		c.add(Rejected, SB024RecordShape, mk, "the value is `%s.new(…)` with every member", rec.Const)
@@ -193,11 +209,11 @@ func (c *progCtx) recordMake(mk *Node, rec *RecordDecl, m *MapDecl, refVar strin
 			e.Args = append(e.Args, &Expr{Kind: "lit", Lit: new(big.Int), Iv: point(new(big.Int)), Pos: c.z.pos(c.a, x)})
 			continue
 		}
-		if f.Count > 0 {
-			if c.ctxCopyOtherKind(x) {
+		if f.Count > 0 { // an array member is `Array.new(N, 0)` only (every element 0 — the record.make leaves `m[i]` are 0)
+			if c.ctxCopyOtherKind(x) { // a ctx copy in a program that is not a tracepoint
 				return nil
 			}
-			if c.isTpCopy(x) {
+			if c.isTpCopy(x) { // `ctx.copy(:f)` in a ring output — 0 in the record.make; lowering copies into the reservation after store_record
 				if !c.ringMake {
 					c.add(Rejected, SB028TracingKind, x, "`%s.copy(:f)` is accepted only as an array member's argument of `R.output(S.new(…))` or as `r.load.<member> = %s.copy(:f)`", c.param, c.param)
 					return nil
@@ -209,7 +225,7 @@ func (c *progCtx) recordMake(mk *Node, rec *RecordDecl, m *MapDecl, refVar strin
 				e.Args = append(e.Args, &Expr{Kind: "zarr", TpCopy: tf, Field: f, Pos: c.z.pos(c.a, x)})
 				continue
 			}
-			if cp, handled := c.ringCopy(x, f, rec); handled {
+			if cp, handled := c.ringCopy(x, f, rec); handled { // `t.copy(:m)` in a ring output
 				if cp == nil {
 					return nil
 				}
@@ -232,6 +248,7 @@ func (c *progCtx) recordMake(mk *Node, rec *RecordDecl, m *MapDecl, refVar strin
 	return e
 }
 
+// zeroArray reports whether x is `Array.new(n, 0)` (with literals).
 func (c *progCtx) zeroArray(x *Node, n int) bool {
 	if x == nil || x.Type != "CallNode" || x.Str["name"] != "new" || constName(c.a, c.a.ref(x, "receiver")) != "Array" {
 		return false
@@ -245,6 +262,7 @@ func (c *progCtx) zeroArray(x *Node, n int) bool {
 	return ok1 && ok2 && a.IsInt64() && a.Int64() == int64(n) && b.Sign() == 0
 }
 
+// outputIsCondition reports whether the output CallNode is itself the condition of an if / unless (one `!` in between is allowed).
 func (c *progCtx) outputIsCondition(n *Node) bool {
 	p := c.a.node(c.a.Parent[n.ID])
 	if p != nil && p.Type == "CallNode" && p.Str["name"] == "!" && c.a.ref(p, "receiver") == n {
@@ -257,6 +275,7 @@ func droppedMsg(r *RingDecl) string {
 	return fmt.Sprintf("the result of %s.output (false when the ring is full) is dropped — use it as an `if` / `unless` condition (count drops in the false arm) or write `_ = %s.output(…)` to choose not to count them", r.Const, r.Const)
 }
 
+// ringLines are the ring buffer lines that keptSource keeps (the declaration and the record's Struct / BPF.record).
 func ringLines(res *Result) []int {
 	var out []int
 	for _, r := range res.Rings {

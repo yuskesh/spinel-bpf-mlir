@@ -1,7 +1,7 @@
 require "bpf"
 
-
-
+# flow_dissector: the IPv4 header's protocol and addresses (data starts at the Ethernet header; offset 14) into flow_keys, thoff set to nhoff + 20,
+# IPv6 addresses by index; drop unless n_proto is 0x0800 (8 as a raw u16)
 def flow4(ctx)
   w = ctx.check(14, 20)
   if w

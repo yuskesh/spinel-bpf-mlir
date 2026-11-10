@@ -1,6 +1,6 @@
 require "bpf"
 
-
+# cgroup_skb with its direction given as a String
 def p(skb)
   BPF::CG_ALLOW
 end

@@ -1,6 +1,6 @@
 require "bpf"
 
-
+# Write to tc len (read-only)
 def p(skb)
   skb.len = 5
   BPF::TC_PASS

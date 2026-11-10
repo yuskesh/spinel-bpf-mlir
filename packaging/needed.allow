@@ -1,3 +1,5 @@
+# The .so files allowed in the NEEDED entries of the executable that spinelbpf build -o makes (one per line; the build stops if an unlisted .so appears)
+# Only Spinel's runtime (libm, libcrypt) and libc. A Go c-archive adds no .so other than libc (measured with glibc 2.41, where libpthread is part of libc).
 libm.so.6
 libcrypt.so.1
 libc.so.6

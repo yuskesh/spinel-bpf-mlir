@@ -1,7 +1,7 @@
 require "bpf"
 
-
-
+# The current task's comm: in kprobe do_sys_poll (nfds, unsigned int, register 2), for the Filter tgid, into Events
+# {nfds, comm: 16 bytes from bpf_get_current_comm, status: the helper's raw status} (R.output_comm → ebpf.task.comm); on success add 1 to Out[0]
 Ev = Struct.new(:nfds, :pad, :comm, :status)
 BPF.record(Ev, nfds: :u32, pad: :u32, comm: [:u8, 16], status: :i64)
 

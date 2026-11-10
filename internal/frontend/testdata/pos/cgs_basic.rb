@@ -1,7 +1,7 @@
 require "bpf"
 
-
-
+# cgroup_skb (ingress and egress share one body): __sk_buff's len into Out[0], the IPv4 protocol (window offset 9; the packet starts at the network header) into Out[1],
+# drop when len exceeds 64 (guard), pass otherwise
 Out = BPF::ArrayMap.new("Out", :u32, 2)
 
 def small_in(skb)

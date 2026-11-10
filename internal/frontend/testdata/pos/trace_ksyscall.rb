@@ -1,8 +1,8 @@
 require "bpf"
 
-
-
-
+# ksyscall: prctl syscall arguments 1 to 5 (7.1.8 tracefs sys_enter_prctl: int option, unsigned long arg2 to arg5,
+# checked before load). Only for the Filter tgid with option 0x4511_5000 (an unknown option; prctl just returns EINVAL):
+# add 1 to Out[0], Out[1] = arg2, Out[2] = arg3, Out[3] = arg4 (r10 in the syscall convention, not cx as in the function convention), add arg5's low 16 bits to Out[4]
 Filter = BPF::ArrayMap.new("Filter", :u32, 1)
 Out = BPF::ArrayMap.new("Out", :u64, 5)
 
